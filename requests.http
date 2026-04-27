@@ -1,0 +1,17 @@
+### Process Structured Payload (Shopify)
+POST http://localhost:5000/api/webhooks/structured/123e4567-e89b-12d3-a456-426614174000
+Content-Type: application/json
+
+{
+    "orderId": "1001",
+    "customer": "Jane Doe",
+    "total": 50.00
+}
+
+### Process Unstructured Payload (WhatsApp)
+POST http://localhost:5000/api/webhooks/unstructured/123e4567-e89b-12d3-a456-426614174000?userId=987654321
+Content-Type: application/json
+
+{
+    "message": "I want to order a burger, my name is Alice, deliver to 456 Elm St, phone 555-1234"
+}

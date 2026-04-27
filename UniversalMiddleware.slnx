@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="UniversalMiddleware.API/UniversalMiddleware.API.csproj" />
+  <Project Path="UniversalMiddleware.Application/UniversalMiddleware.Application.csproj" />
+  <Project Path="UniversalMiddleware.Domain/UniversalMiddleware.Domain.csproj" />
+  <Project Path="UniversalMiddleware.Infrastructure/UniversalMiddleware.Infrastructure.csproj" />
+  <Project Path="UniversalMiddleware.Tests/UniversalMiddleware.Tests.csproj" />
+</Solution>
