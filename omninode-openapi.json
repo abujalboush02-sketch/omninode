@@ -1,0 +1,112 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "OmniNode Universal Middleware API",
+    "description": "Programmatically provision tenants, map custom schema pipelines, and ingest unstructured data via AI-powered webhook architecture.",
+    "version": "v1.0"
+  },
+  "servers": [
+    {
+      "url": "https://omni.mohammad-abujalboush.com/api"
+    }
+  ],
+  "paths": {
+    "/Webhooks/structured/{endpointId}": {
+      "post": {
+        "summary": "Ingest Structured Webhook",
+        "description": "Accepts standard, structured JSON payloads directly from a Source and commits it to the Outbox queue.",
+        "parameters": [
+          {
+            "name": "endpointId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object" },
+              "example": { "receipt_no": "ORD-1042", "total_price_cents": 35000 }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Accepted. Payload queued in Outbox." }
+        }
+      }
+    },
+    "/Webhooks/unstructured/{endpointId}": {
+      "post": {
+        "summary": "AI Unstructured Text Parsing",
+        "description": "Pass messy text. Our LLM engine autonomously reads the intent and extracts variables to build a structured JSON object.",
+        "parameters": [
+          {
+            "name": "endpointId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "text": { "type": "string" } }
+              },
+              "example": { "text": "Client needs 5 ergonomic chairs sent to the Amman office." }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Accepted. AI processing initiated." }
+        }
+      }
+    },
+    "/Tenants": {
+      "post": {
+        "summary": "Create Tenant",
+        "description": "Creates a cryptographically isolated database partition for a new client.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "planType": { "type": "string" },
+                  "subscriptionTier": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Tenant Created" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key"
+      }
+    }
+  },
+  "security": [
+    { "ApiKeyAuth": [] }
+  ]
+}
