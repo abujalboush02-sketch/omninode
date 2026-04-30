@@ -11,6 +11,7 @@ namespace UniversalMiddleware.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[ApiKeyAuth]
 public class TenantsController : ControllerBase {
     private readonly AppDbContext _context;
 

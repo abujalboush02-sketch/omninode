@@ -10,6 +10,7 @@ namespace UniversalMiddleware.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[ApiKeyAuth]
 public class EventsController : ControllerBase
 {
     private readonly AppDbContext _context;

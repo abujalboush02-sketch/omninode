@@ -10,6 +10,7 @@ namespace UniversalMiddleware.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[ApiKeyAuth]
 public class CredentialsController : ControllerBase
 {
     private readonly AppDbContext _context;

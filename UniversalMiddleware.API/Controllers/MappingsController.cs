@@ -17,6 +17,7 @@ public class ConfigureMappingRequest {
 
 [ApiController]
 [Route("api/[controller]")]
+[ApiKeyAuth]
 public class MappingsController : ControllerBase {
     private readonly AppDbContext _context;
     private readonly MappingValidationService _validationService;

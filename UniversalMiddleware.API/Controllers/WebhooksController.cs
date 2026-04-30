@@ -10,6 +10,7 @@ namespace UniversalMiddleware.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[ApiKeyAuth]
 public class WebhooksController : ControllerBase {
     private readonly AppDbContext _dbContext;
     

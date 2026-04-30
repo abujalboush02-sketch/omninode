@@ -16,6 +16,7 @@ public class DiscoverCustomRequest {
 
 [ApiController]
 [Route("api/schemas")]
+[ApiKeyAuth]
 public class DiscoveryController : ControllerBase {
     private readonly AppDbContext _context;
     private readonly SchemaBuilderService _schemaBuilder;
