@@ -1,6 +1,17 @@
-# Universal Middleware
+# OmniNode Universal Middleware
 
 A production-ready, multi-tenant middleware designed to bridge any Source Marketplace (Shopify, WooCommerce) or Unstructured Source (WhatsApp via Llama 3 AI) with any Destination CRM (HubSpot, Salesforce).
+
+## Live API & Documentation
+* **Base URL:** `https://omni.mohammad-abujalboush.com/api`
+* **Authentication:** Pass your API key via the `X-Api-Key` header.
+* **OpenAPI Spec:** A complete interactive Swagger UI and code snippets in 15 languages are provided via our APILayer portal.
+
+## Pricing
+We offer flexible, usage-based tiers for developers and enterprises via APILayer:
+* **Free Tier:** $0/month (100 API Requests) - Perfect for testing the AI text-to-JSON parser.
+* **Starter Tier:** $29/month (1,000 API Requests) - For early-stage SaaS apps.
+* **Pro Tier:** $99/month (10,000 API Requests) - Production-ready limits.
 
 ## Architecture Highlights
 - **Multi-Tenant:** Secure and isolated tenant execution environments.
@@ -23,8 +34,3 @@ Monitor the health and queues using:
 - `GET /api/Events/logs/{tenantId}`: Get recent events for a specific tenant.
 - `GET /api/Events/pending`: Monitor the outbound queue.
 - `GET /api/Events/failed`: Review events that exhausted all retries.
-
-## Getting Started
-1. Run `dotnet restore`
-2. Run `dotnet run --project UniversalMiddleware.API`
-3. Navigate to `http://localhost:5000/swagger` to explore the complete API using the Swagger UI.
