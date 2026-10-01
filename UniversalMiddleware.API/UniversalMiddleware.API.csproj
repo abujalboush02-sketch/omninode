@@ -3,7 +3,7 @@
   <PropertyGroup>
     <EnableOpenApiSourceGenerator>false</EnableOpenApiSourceGenerator>
     <OpenApiGenerateDocuments>false</OpenApiGenerateDocuments>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OpenApiGenerateDocuments>false</OpenApiGenerateDocuments>
