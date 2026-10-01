@@ -1,17 +1,163 @@
-### Process Structured Payload (Shopify)
-POST http://localhost:5000/api/webhooks/structured/123e4567-e89b-12d3-a456-426614174000
+@baseUrl = https://omni.mohammad-abujalboush.com/api
+# Fallback local testing: @baseUrl = http://localhost:3030/api
+
+@masterKey = YOUR_MASTER_API_KEY
+@tenantKey = YOUR_GENERATED_TENANT_KEY
+@tenantId = YOUR_TENANT_ID
+@sourceEndpointId = YOUR_SOURCE_ENDPOINT_ID
+@destEndpointId = YOUR_DESTINATION_ENDPOINT_ID
+@connectionId = YOUR_CONNECTION_ID
+
+# ==========================================
+# PHASE 1: INFRASTRUCTURE SETUP (ADMIN ONLY)
+# ==========================================
+
+### 1. Create a New Tenant (Requires Master Key)
+POST {{baseUrl}}/Tenants
+X-Api-Key: {{masterKey}}
 Content-Type: application/json
 
 {
-    "orderId": "1001",
-    "customer": "Jane Doe",
-    "total": 50.00
+  "name": "Alpha E-Commerce Agency",
+  "ownerName": "Client Admin",
+  "ownerEmail": "admin@alpha-agency.com",
+  "planType": "SaaS",
+  "subscriptionTier": "Pro"
 }
 
-### Process Unstructured Payload (WhatsApp)
-POST http://localhost:5000/api/webhooks/unstructured/123e4567-e89b-12d3-a456-426614174000?userId=987654321
+### 2. Generate Tenant API Key (Requires Master Key)
+# NOTE: Save the output key to the @tenantKey variable above.
+POST {{baseUrl}}/Tenants/{{tenantId}}/generate-key
+X-Api-Key: {{masterKey}}
+
+
+# ==========================================
+# PHASE 2: ROUTING CONFIGURATION (TENANT SECURED)
+# ==========================================
+
+### 3. Create Source Endpoint (e.g., Shopify)
+POST {{baseUrl}}/Endpoints
+X-Api-Key: {{tenantKey}}
 Content-Type: application/json
 
 {
-    "message": "I want to order a burger, my name is Alice, deliver to 456 Elm St, phone 555-1234"
+  "platformName": "Shopify",
+  "endpointType": "Source",
+  "webhookUrl": "https://omni.mohammad-abujalboush.com/api/webhooks/structured/will-be-assigned",
+  "authHeaders": ""
 }
+
+### 4. Create Destination Endpoint (e.g., HubSpot CRM)
+POST {{baseUrl}}/Endpoints
+X-Api-Key: {{tenantKey}}
+Content-Type: application/json
+
+{
+  "platformName": "HubSpot",
+  "endpointType": "Destination",
+  "webhookUrl": "https://api.hubapi.com/crm/v3/objects/deals",
+  "authHeaders": "Bearer"
+}
+
+### 5. Create Destination Credential
+POST {{baseUrl}}/Credentials
+X-Api-Key: {{tenantKey}}
+Content-Type: application/json
+
+{
+  "endpointId": "{{destEndpointId}}",
+  "baseUrl": "https://api.hubapi.com/crm/v3/objects/deals",
+  "apiKey": "hubspot_pat_token_here",
+  "authType": "Bearer"
+}
+
+### 6. Create Connection (Linking Source to Destination)
+POST {{baseUrl}}/Connections
+X-Api-Key: {{tenantKey}}
+Content-Type: application/json
+
+{
+  "sourceEndpointId": "{{sourceEndpointId}}",
+  "destinationEndpointId": "{{destEndpointId}}"
+}
+
+### 7. Get AI Mapping Suggestions
+GET {{baseUrl}}/Mappings/suggest/{{connectionId}}
+X-Api-Key: {{tenantKey}}
+
+### 8. Configure Field Mappings (Activates the Connection)
+POST {{baseUrl}}/Mappings/configure
+X-Api-Key: {{tenantKey}}
+Content-Type: application/json
+
+{
+  "connectionId": "{{connectionId}}",
+  "rules": [
+    {
+      "endpointId": "{{sourceEndpointId}}",
+      "sourceKey": "customer.first_name",
+      "targetKey": "firstname",
+      "type": "string"
+    },
+    {
+      "endpointId": "{{sourceEndpointId}}",
+      "sourceKey": "total_price",
+      "targetKey": "amount",
+      "type": "number",
+      "math": "/100" 
+    }
+  ]
+}
+
+
+# ==========================================
+# PHASE 3: WEBHOOK INGESTION & PIPELINE
+# ==========================================
+
+### 9. Ingest Structured Webhook (e.g., from Shopify)
+POST {{baseUrl}}/webhooks/structured/{{sourceEndpointId}}
+X-Api-Key: {{tenantKey}}
+Content-Type: application/json
+
+{
+  "id": "999888777",
+  "customer": {
+    "first_name": "Alice",
+    "email": "alice@example.com"
+  },
+  "total_price": "5000"
+}
+
+### 10. Ingest Unstructured Webhook (e.g., from WhatsApp/Groq LLM parsing)
+POST {{baseUrl}}/webhooks/unstructured/{{sourceEndpointId}}?userId=962791234567
+X-Api-Key: {{tenantKey}}
+Content-Type: application/json
+
+{
+  "message": "Hi, I'd like to order a large pizza to Rabyeh, Amman. Name is Basel, phone 0791234567."
+}
+
+
+# ==========================================
+# PHASE 4: LOGGING & MONITORING
+# ==========================================
+
+### 11. View All Endpoints for Tenant
+GET {{baseUrl}}/Endpoints
+X-Api-Key: {{tenantKey}}
+
+### 12. View All Webhook Events (Tenant Scoped)
+GET {{baseUrl}}/Events/logs
+X-Api-Key: {{tenantKey}}
+
+### 13. View Pending Queue 
+GET {{baseUrl}}/Events/pending
+X-Api-Key: {{tenantKey}}
+
+### 14. View Failed Deliveries (Manual Review Required)
+GET {{baseUrl}}/Events/failed
+X-Api-Key: {{tenantKey}}
+
+### 15. Delete an Endpoint (Will cascade delete connections/rules)
+DELETE {{baseUrl}}/Endpoints/{{sourceEndpointId}}
+X-Api-Key: {{tenantKey}}

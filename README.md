@@ -1,36 +1,37 @@
-# OmniNode Universal Middleware
+﻿# OmniNode Middleware API
 
-A production-ready, multi-tenant middleware designed to bridge any Source Marketplace (Shopify, WooCommerce) or Unstructured Source (WhatsApp via Llama 3 AI) with any Destination CRM (HubSpot, Salesforce).
+**OmniNode** is an enterprise-grade, multi-tenant middleware API designed to act as the universal bridge between e-commerce source platforms (like Shopify and WooCommerce) and destination CRMs (like HubSpot and Salesforce).
 
-## Live API & Documentation
-* **Base URL:** `https://omni.mohammad-abujalboush.com/api`
-* **Authentication:** Pass your API key via the `X-Api-Key` header.
-* **OpenAPI Spec:** A complete interactive Swagger UI and code snippets in 15 languages are provided via our APILayer portal.
+Built on a robust .NET 10 architecture and utilizing PostgreSQL with an advanced outbox pattern, OmniNode guarantees zero data loss during high-volume webhook bursts. It features native AI parsing via Groq's Llama 3 models, allowing unstructured data from channels like WhatsApp to be automatically structured and routed seamlessly.
 
-## Pricing
-We offer flexible, usage-based tiers for developers and enterprises via APILayer:
-* **Free Tier:** $0/month (100 API Requests) - Perfect for testing the AI text-to-JSON parser.
-* **Starter Tier:** $29/month (1,000 API Requests) - For early-stage SaaS apps.
-* **Pro Tier:** $99/month (10,000 API Requests) - Production-ready limits.
+---
 
-## Architecture Highlights
-- **Multi-Tenant:** Secure and isolated tenant execution environments.
-- **Llama 3 AI-Driven Unstructured Parsing:** Passively ingest messages from WhatsApp/Telegram to parse orders automatically.
-- **n8n-friendly Webhook Architecture:** Robust ingestion engine that easily integrates with standard webhook platforms.
-- **PostgreSQL Outbox Pattern:** High-reliability background processing with exponential backoff retries. If the destination CRM fails, the system automatically retries without data loss.
+## 🌍 Live Deployment & Documentation
 
-## Step-by-Step API Workflow
-Follow this exact workflow to configure a new integration via the Management Shell:
+* **Live Endpoint:** `https://omni.mohammad-abujalboush.com/api`
+* **Infrastructure:** Containerized via Docker Compose, hosted on a Contabo VPS, and routed securely through an Nginx reverse proxy.
+* **Authentication:** All requests must include the `X-Api-Key` header.
+* **Interactive Documentation:** A complete OpenAPI Swagger specification is available at `/docs` on the live domain, providing interactive testing and code snippets.
 
-1. **Create Tenant** (`POST /api/Tenants`): Register the new client and secure an API key.
-2. **Create Endpoints** (`POST /api/Endpoints`): Register the Source Endpoint (e.g. Shopify webhook) and the Destination Endpoint (e.g. HubSpot CRM).
-3. **Add Credentials** (`POST /api/Credentials`): Securely store API keys or tokens required for the generic output adapter to POST to the destination.
-4. **Create Connection** (`POST /api/Connections`): Link the Source Endpoint to the Destination Endpoint.
-5. **Configure Mappings** (`POST /api/Mappings/configure`): Set up the `FieldMappingRules` to map incoming fields (e.g. `order_total`) to destination fields (e.g. `amount_due`), including math and type transformations. This makes the connection `Active`.
-6. **Fire Webhooks**: Webhooks can now be ingested via `POST /api/webhooks/structured/{endpointId}` or `POST /api/webhooks/unstructured/{endpointId}?userId={phone}`. They are safely buffered in the PostgreSQL Outbox.
+---
 
-## Logs & Monitoring
-Monitor the health and queues using:
-- `GET /api/Events/logs/{tenantId}`: Get recent events for a specific tenant.
-- `GET /api/Events/pending`: Monitor the outbound queue.
-- `GET /api/Events/failed`: Review events that exhausted all retries.
+## 🏗 Core Architecture & Capabilities
+
+* **Strict Multi-Tenancy:** Cryptographically hashed API keys and execution-context tenant scoping prevent cross-tenant data leaks (IDOR). A master key secures administrative billing and provisioning endpoints.
+* **Transactional Outbox Pattern:** Incoming webhooks are immediately persisted to a PostgreSQL `jsonb` outbox. An adaptive, parallelized background worker (`EventProcessingWorker`) processes the queue, guaranteeing delivery even if the destination CRM experiences downtime.
+* **Resilient Execution Engine:** Built with Entity Framework Core execution strategies, transient fault handling, and exponential backoff.
+* **AI Unstructured Parsing:** Integrates with Groq (Llama 3 8B) with strict JSON-mode compliance and prompt-injection safeguards to convert messy chat logs into actionable CRM schemas.
+* **Deep JSON Transformation:** A custom dot-notation mapping engine flattens complex e-commerce payloads and applies data type casting and mathematical conversions (e.g., converting cents to dollars) on the fly.
+
+---
+
+## 🚀 Quick Start (Docker Deployment)
+
+OmniNode is designed for rapid deployment via Docker Compose.
+
+1. **Configure Environment Variables**  
+   Create a `.env` file in the root directory:
+   ```env
+   GROQ_API_KEY=your_groq_api_key
+   DB_PASSWORD=your_secure_postgres_password
+   MASTER_API_KEY=um_master_secret_key_123
