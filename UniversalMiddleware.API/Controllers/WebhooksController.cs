@@ -1,7 +1,7 @@
-using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Domain;
@@ -10,73 +10,139 @@ namespace UniversalMiddleware.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[ApiKeyAuth]
-public class WebhooksController : ControllerBase {
+[ApiKeyAuth] // Guarantees HttpContext.Items["TenantId"] is populated for valid tenants
+public class WebhooksController : ControllerBase
+{
     private readonly AppDbContext _dbContext;
-    
-    public WebhooksController(AppDbContext dbContext) {
+
+    public WebhooksController(AppDbContext dbContext)
+    {
         _dbContext = dbContext;
     }
 
-    [HttpPost("structured/{endpointId}")]
-    public async Task<IActionResult> ProcessStructured(Guid endpointId, [FromBody] JsonElement payload) {
-        var endpoint = await _dbContext.Endpoints.FirstOrDefaultAsync(e => e.Id == endpointId);
-        if (endpoint == null) return NotFound("Endpoint not found.");
-
-        var tenant = await _dbContext.Tenants.FirstOrDefaultAsync(t => t.Id == endpoint.TenantId);
-        if (tenant == null) return NotFound("Tenant not found.");
-
-        if (tenant.TasksUsedThisMonth >= tenant.MonthlyTaskQuota) {
-            return StatusCode(429, new { error = "Monthly task quota exceeded. Please upgrade your plan to continue processing webhooks." });
+    private Guid GetAuthenticatedTenantId()
+    {
+        if (HttpContext.Items.TryGetValue("TenantId", out var tenantIdObj) && tenantIdObj is Guid tenantId)
+        {
+            return tenantId;
         }
-
-        tenant.TasksUsedThisMonth += 1;
-
-        var rawEvent = new RawEvent {
-            EndpointId = endpointId,
-            TenantId = endpoint.TenantId,
-            Payload = payload.ToString(),
-            Status = "Pending",
-            RetryCount = 0,
-            MaxRetries = 5,
-            ReceivedAt = DateTime.UtcNow
-        };
-        
-        _dbContext.RawEvents.Add(rawEvent);
-        await _dbContext.SaveChangesAsync();
-        
-        return Accepted();
+        throw new UnauthorizedAccessException("Tenant ID is missing from the authenticated context.");
     }
 
-    [HttpPost("unstructured/{endpointId}")]
-    public async Task<IActionResult> ProcessUnstructured(Guid endpointId, [FromQuery] string userId, [FromBody] JsonElement payload) {
-        var endpoint = await _dbContext.Endpoints.FirstOrDefaultAsync(e => e.Id == endpointId);
-        if (endpoint == null) return NotFound("Endpoint not found.");
+    [HttpPost("structured/{endpointId:guid}")]
+    public async Task<IActionResult> ProcessStructured(Guid endpointId, [FromBody] JsonElement payload)
+    {
+        var authTenantId = GetAuthenticatedTenantId();
 
-        var tenant = await _dbContext.Tenants.FirstOrDefaultAsync(t => t.Id == endpoint.TenantId);
-        if (tenant == null) return NotFound("Tenant not found.");
+        // 1. Cross-Tenant Data Injection Prevention
+        var endpointExists = await _dbContext.Endpoints
+            .AsNoTracking()
+            .AnyAsync(e => e.Id == endpointId && e.TenantId == authTenantId);
 
-        if (tenant.TasksUsedThisMonth >= tenant.MonthlyTaskQuota) {
-            return StatusCode(429, new { error = "Monthly task quota exceeded. Please upgrade your plan to continue processing webhooks." });
-        }
+        if (!endpointExists)
+            return NotFound(new { Error = "Endpoint not found or you do not have permission to access it." });
 
-        tenant.TasksUsedThisMonth += 1;
+        // 2. Resilience: Wrap explicit transaction in Execution Strategy (Required by EnableRetryOnFailure)
+        var strategy = _dbContext.Database.CreateExecutionStrategy();
 
-        var payloadStr = JsonSerializer.Serialize(new { userId, payload });
-        
-        var rawEvent = new RawEvent {
-            EndpointId = endpointId,
-            TenantId = endpoint.TenantId,
-            Payload = payloadStr,
-            Status = "Pending",
-            RetryCount = 0,
-            MaxRetries = 5,
-            ReceivedAt = DateTime.UtcNow
-        };
-        
-        _dbContext.RawEvents.Add(rawEvent);
-        await _dbContext.SaveChangesAsync();
-        
-        return Accepted();
+        var result = await strategy.ExecuteAsync(async () =>
+        {
+            using var transaction = await _dbContext.Database.BeginTransactionAsync();
+            try
+            {
+                // 3. Thread-Safe Quota Increment (Avoids Race Conditions)
+                var rowsAffected = await _dbContext.Tenants
+                    .Where(t => t.Id == authTenantId && t.TasksUsedThisMonth < t.MonthlyTaskQuota)
+                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1));
+
+                if (rowsAffected == 0)
+                {
+                    return StatusCode(429, new { Error = "Monthly task quota exceeded. Please upgrade your plan." });
+                }
+
+                // 4. Memory-Optimized Payload Extraction
+                var rawEvent = new RawEvent
+                {
+                    EndpointId = endpointId,
+                    TenantId = authTenantId,
+                    Payload = payload.GetRawText(), // Eliminates generic ToString() overhead
+                    Status = "Pending",
+                    RetryCount = 0,
+                    MaxRetries = 5,
+                    ReceivedAt = DateTime.UtcNow
+                };
+
+                _dbContext.RawEvents.Add(rawEvent);
+                await _dbContext.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Accepted(new { Message = "Webhook queued successfully for processing." });
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        });
+
+        return result;
+    }
+
+    [HttpPost("unstructured/{endpointId:guid}")]
+    public async Task<IActionResult> ProcessUnstructured(Guid endpointId, [FromQuery] string userId, [FromBody] JsonElement payload)
+    {
+        var authTenantId = GetAuthenticatedTenantId();
+
+        var endpointExists = await _dbContext.Endpoints
+            .AsNoTracking()
+            .AnyAsync(e => e.Id == endpointId && e.TenantId == authTenantId);
+
+        if (!endpointExists)
+            return NotFound(new { Error = "Endpoint not found or you do not have permission to access it." });
+
+        var strategy = _dbContext.Database.CreateExecutionStrategy();
+
+        var result = await strategy.ExecuteAsync(async () =>
+        {
+            using var transaction = await _dbContext.Database.BeginTransactionAsync();
+            try
+            {
+                var rowsAffected = await _dbContext.Tenants
+                    .Where(t => t.Id == authTenantId && t.TasksUsedThisMonth < t.MonthlyTaskQuota)
+                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1));
+
+                if (rowsAffected == 0)
+                {
+                    return StatusCode(429, new { Error = "Monthly task quota exceeded. Please upgrade your plan." });
+                }
+
+                // Safely wrap the unstructured payload alongside the userId identifier
+                var wrappedPayload = JsonSerializer.Serialize(new { userId, payload });
+
+                var rawEvent = new RawEvent
+                {
+                    EndpointId = endpointId,
+                    TenantId = authTenantId,
+                    Payload = wrappedPayload,
+                    Status = "Pending",
+                    RetryCount = 0,
+                    MaxRetries = 5,
+                    ReceivedAt = DateTime.UtcNow
+                };
+
+                _dbContext.RawEvents.Add(rawEvent);
+                await _dbContext.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Accepted(new { Message = "Unstructured webhook queued successfully for parsing." });
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        });
+
+        return result;
     }
 }

@@ -1,8 +1,11 @@
 using System;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using UniversalMiddleware.Infrastructure;
@@ -12,44 +15,65 @@ namespace UniversalMiddleware.API;
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
 public class ApiKeyAuthAttribute : Attribute, IAsyncActionFilter
 {
+    private const string ApiKeyHeaderName = "X-Api-Key";
+    private const string TenantIdItemKey = "TenantId";
+
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        if (!context.HttpContext.Request.Headers.TryGetValue("X-Api-Key", out var extractedApiKey))
+        // 1. Standardized Header Extraction
+        if (!context.HttpContext.Request.Headers.TryGetValue(ApiKeyHeaderName, out var extractedApiKey))
         {
-            context.Result = new UnauthorizedObjectResult("API Key is missing.");
+            context.Result = new UnauthorizedObjectResult(new { Error = "API Key is missing." });
             return;
         }
 
         var configuration = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         var controllerName = context.ActionDescriptor.RouteValues["controller"];
 
-        if (controllerName == "Tenants")
+        if (string.Equals(controllerName?.ToString(), "Tenants", StringComparison.OrdinalIgnoreCase))
         {
             var masterKey = configuration.GetValue<string>("MasterApiKey");
-            if (string.IsNullOrEmpty(masterKey) || extractedApiKey != masterKey)
+
+            // Fail secure if the master key is missing from environment variables
+            if (string.IsNullOrEmpty(masterKey))
             {
-                context.Result = new UnauthorizedObjectResult("Invalid Master API Key.");
+                context.Result = new UnauthorizedObjectResult(new { Error = "Server configuration error." });
+                return;
+            }
+
+            // 2. Cryptographic Timing Attack Prevention
+            var masterKeyBytes = Encoding.UTF8.GetBytes(masterKey);
+            var extractedKeyBytes = Encoding.UTF8.GetBytes(extractedApiKey.ToString());
+
+            if (masterKeyBytes.Length != extractedKeyBytes.Length ||
+                !CryptographicOperations.FixedTimeEquals(masterKeyBytes, extractedKeyBytes))
+            {
+                context.Result = new UnauthorizedObjectResult(new { Error = "Invalid Master API Key." });
                 return;
             }
         }
         else
         {
             var dbContext = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
-            
-            // Re-hash the provided key and check if it exists in the database
-            using var sha256 = System.Security.Cryptography.SHA256.Create();
-            var hashedBytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(extractedApiKey));
+
+            // 3. Allocation-Free Hashing (.NET 10 Optimization)
+            var hashedBytes = SHA256.HashData(Encoding.UTF8.GetBytes(extractedApiKey.ToString()));
             var hashedString = Convert.ToBase64String(hashedBytes);
-            
-            var tenant = dbContext.Tenants.FirstOrDefault(t => t.ApiKeyHash == hashedString);
+
+            // 4. Asynchronous, Non-Tracking Database Query
+            var tenant = await dbContext.Tenants
+                .AsNoTracking()
+                .Where(t => t.ApiKeyHash == hashedString)
+                .Select(t => new { t.Id }) // Fetch only the ID to reduce memory overhead
+                .FirstOrDefaultAsync(context.HttpContext.RequestAborted);
+
             if (tenant == null)
             {
-                context.Result = new UnauthorizedObjectResult("Invalid API Key.");
+                context.Result = new UnauthorizedObjectResult(new { Error = "Invalid API Key." });
                 return;
             }
-            
-            // Optional: Store TenantId in HttpContext items for further controller usage
-            context.HttpContext.Items["TenantId"] = tenant.Id;
+
+            context.HttpContext.Items[TenantIdItemKey] = tenant.Id;
         }
 
         await next();

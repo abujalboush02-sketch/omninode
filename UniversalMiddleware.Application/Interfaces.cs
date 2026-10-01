@@ -5,25 +5,27 @@ using UniversalMiddleware.Domain;
 
 namespace UniversalMiddleware.Application;
 
-public interface ILlamaAgentService {
-    // Passive evaluation, will return Incomplete if missing fields, does not trigger responses.
+public interface ILlamaAgentService
+{
     Task<OrderDraft> ParsePassiveMessageAsync(Guid sessionId, string messageContent);
 }
 
-public interface IWebhookProcessor {
-    Task EnqueueStructuredPayloadAsync(Guid endpointId, string jsonPayload);
-    Task EnqueueUnstructuredPayloadAsync(Guid endpointId, string externalUserId, string messageContent);
+// 1. Updated to match the parallel architecture from Phase 1
+public interface IEventProcessor
+{
+    Task ProcessAsync(RawEvent evt);
+    Task ProcessPendingRawEventsAsync(); // Legacy support
 }
 
-public interface IEventProcessor {
-    Task ProcessPendingRawEventsAsync();
+// 2. Updated to match the robust transformation engine from Phase 1
+public interface ITransformationService
+{
+    Task<string> TransformAsync(string sourcePayload, IEnumerable<FieldMappingRule> rules);
+    string TransformPayload(string sourcePayload, Mapping mapping); // Legacy support
 }
 
-public interface ITransformationService {
-    string TransformPayload(string sourcePayload, Mapping mapping);
-}
-
-public interface ISchemaDiscoveryService {
+public interface ISchemaDiscoveryService
+{
     Task<IEnumerable<SchemaTemplate>> GetStandardTemplatesAsync();
     Task<SchemaTemplate?> GetTemplateByPlatformAsync(string platformName);
 }

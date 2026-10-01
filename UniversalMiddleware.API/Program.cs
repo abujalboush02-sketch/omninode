@@ -1,30 +1,40 @@
 using System;
-using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.OpenApi.Models;
+using Serilog;
 using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Application;
-using Serilog;
 using UniversalMiddleware.API;
-using Microsoft.Extensions.Configuration;
-using Microsoft.OpenApi.Models; // Models namespace is back!
 
 var builder = WebApplication.CreateBuilder(args);
 
-Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
+// 1. Production-Ready Logging (Enrichment + Global Capture)
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
 builder.Host.UseSerilog();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// === EXACT SWAGGER CONFIG FROM WOOFOOD ===
+// 2. API Documentation Setup (Branded for OmniNode consumers)
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Universal Middleware API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "OmniNode Middleware API",
+        Version = "v1",
+        Description = "Multi-tenant routing API bridging e-commerce platforms with external CRMs."
+    });
 
-    // Configure API Key authentication for Swagger UI
     c.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
     {
         Description = "API Key for authentication. Example: `X-Api-Key: YOUR_API_KEY`",
@@ -41,23 +51,28 @@ builder.Services.AddSwaggerGen(c =>
             {
                 Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" }
             },
-            new string[] { }
+            Array.Empty<string>()
         }
     });
 });
 
-// RESTORED POSTGRESQL
+// 3. Resilient Database Connection (Retry on Transient Failures)
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
+        npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 3,
+            maxRetryDelay: TimeSpan.FromSeconds(5),
+            errorCodesToAdd: null)));
 
+// 4. LLM Service Setup
 builder.Services.Configure<LlamaSettings>(builder.Configuration.GetSection("LlamaSettings"));
-builder.Services.AddHttpClient<ILlamaAgentService, LlamaAgentService>(client => 
+builder.Services.AddHttpClient<ILlamaAgentService, LlamaAgentService>(client =>
 {
     var baseUrl = builder.Configuration["LlamaSettings:BaseUrl"];
     client.BaseAddress = new Uri(string.IsNullOrEmpty(baseUrl) ? "https://api.groq.com/openai/v1" : baseUrl);
 });
 
-// RESTORED SERVICES
+// 5. Dependency Injection
 builder.Services.AddScoped<IWebhookProcessor, WebhookProcessor>();
 builder.Services.AddScoped<ISchemaDiscoveryService, SchemaDiscoveryService>();
 builder.Services.AddScoped<ITransformationService, TransformationService>();
@@ -67,29 +82,86 @@ builder.Services.AddScoped<IGenericHttpOutputAdapter, GenericHttpOutputAdapter>(
 builder.Services.AddScoped<SchemaBuilderService>();
 builder.Services.AddScoped<MappingValidationService>();
 builder.Services.AddScoped<MappingSuggestionService>();
+builder.Services.AddHttpClient("OutboundCrmClient");
 
 builder.Services.AddHostedService<EventProcessingWorker>();
 
+// 6. APILayer & Docker Monitoring (Health Checks)
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>();
+
+// 7. Nginx Reverse Proxy Headers (Preserves real client IP)
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Clear restrictions to ensure Docker bridge networks don't block the headers
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+// 8. CORS Strategy (Required for Agency Dashboard Frontends)
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("OmniNodeCorsPolicy", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
 var app = builder.Build();
 
-// RESTORED SEEDER WITH AUTO-CREATE
+// Configure Nginx reverse proxy headers before any logging or routing
+app.UseForwardedHeaders();
+
+// Attach Serilog to capture HTTP requests
+app.UseSerilogRequestLogging();
+
+// 9. Safe Asynchronous Database Initialization
 using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    
-    // This forces Postgres to create the database and tables based on your models!
-    context.Database.EnsureCreated(); 
-    
-    // Then seed the data
-    DataSeeder.SeedTemplatesAsync(context).Wait();
+
+    try
+    {
+        // Applies migrations without dropping tables (Requires EF Core Migrations configured)
+        await context.Database.MigrateAsync();
+        await DataSeeder.SeedTemplatesAsync(context);
+    }
+    catch (Exception ex)
+    {
+        Log.Fatal(ex, "An error occurred while migrating or seeding the database.");
+    }
 }
 
-if (app.Environment.IsDevelopment())
+// 10. Swagger exposed unconditionally for API consumers
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "OmniNode API V1");
+    // Maps Swagger to domain.com/docs to avoid conflict with the root domain API mapping
+    c.RoutePrefix = "docs";
+});
 
+app.UseCors("OmniNodeCorsPolicy");
+app.UseRouting();
 app.UseAuthorization();
+
+// Map the health check endpoint
+app.MapHealthChecks("/health");
 app.MapControllers();
-app.Run();
+
+try
+{
+    Log.Information("Starting OmniNode API host...");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Host terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
