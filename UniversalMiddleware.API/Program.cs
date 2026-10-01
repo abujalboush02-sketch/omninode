@@ -73,7 +73,6 @@ builder.Services.AddHttpClient<ILlamaAgentService, LlamaAgentService>(client =>
 });
 
 // 5. Dependency Injection
-builder.Services.AddScoped<IWebhookProcessor, WebhookProcessor>();
 builder.Services.AddScoped<ISchemaDiscoveryService, SchemaDiscoveryService>();
 builder.Services.AddScoped<ITransformationService, TransformationService>();
 builder.Services.AddScoped<IConnectionWizardService, ConnectionWizardService>();

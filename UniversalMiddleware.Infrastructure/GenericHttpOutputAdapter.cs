@@ -5,16 +5,9 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using UniversalMiddleware.Domain;
+using UniversalMiddleware.Application; // Grants access to HttpAdapterResult
 
 namespace UniversalMiddleware.Infrastructure;
-
-// 1. Result Wrapper for Exception Bubble-Up
-public class HttpAdapterResult
-{
-    public bool IsSuccess { get; set; }
-    public int StatusCode { get; set; }
-    public string ErrorMessage { get; set; }
-}
 
 public class GenericHttpOutputAdapter : IGenericHttpOutputAdapter
 {
@@ -27,13 +20,9 @@ public class GenericHttpOutputAdapter : IGenericHttpOutputAdapter
         _logger = logger;
     }
 
-    // 2. Upgraded Method Aligning with EventProcessor.cs Architecture
     public async Task<HttpAdapterResult> SendAsync(Connection connection, string transformedJson)
     {
-        // Use HttpClientFactory to prevent socket exhaustion under high load
         var client = _httpClientFactory.CreateClient("OutboundCrmClient");
-
-        // 3. Thread Protection: Hard Timeout
         client.Timeout = TimeSpan.FromSeconds(15);
 
         var request = new HttpRequestMessage(HttpMethod.Post, connection.BaseUrl)
@@ -41,7 +30,6 @@ public class GenericHttpOutputAdapter : IGenericHttpOutputAdapter
             Content = new StringContent(transformedJson, Encoding.UTF8, "application/json")
         };
 
-        // 4. Dynamic Authentication Handling
         ApplyAuthentication(request, connection);
 
         try
@@ -72,14 +60,13 @@ public class GenericHttpOutputAdapter : IGenericHttpOutputAdapter
         }
     }
 
-    // 5. Legacy Method Support
     public async Task<bool> SendToDestinationAsync(string transformedJson, TenantCredential credential)
     {
         var connection = new Connection
         {
             BaseUrl = credential.BaseUrl,
             ApiKey = credential.ApiKey,
-            AuthType = "Header" // Fallback assumption
+            AuthType = "Header"
         };
 
         var result = await SendAsync(connection, transformedJson);
@@ -94,7 +81,6 @@ public class GenericHttpOutputAdapter : IGenericHttpOutputAdapter
     {
         if (string.IsNullOrWhiteSpace(connection.ApiKey)) return;
 
-        // Ensure versatile authentication mechanisms for diverse CRMs
         switch (connection.AuthType?.ToLowerInvariant())
         {
             case "bearer":
@@ -106,7 +92,6 @@ public class GenericHttpOutputAdapter : IGenericHttpOutputAdapter
                 break;
             case "header":
             default:
-                // Defaulting to "Authorization" or "x-api-key" depending on target CRM specs
                 request.Headers.TryAddWithoutValidation(
                     string.IsNullOrWhiteSpace(connection.AuthHeaderName) ? "Authorization" : connection.AuthHeaderName,
                     connection.ApiKey);

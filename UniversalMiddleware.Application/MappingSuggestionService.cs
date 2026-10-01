@@ -37,7 +37,6 @@ public class MappingSuggestionService
                 return suggestions;
             }
 
-            // 1. Flatten nested JSON payloads using dot-notation
             var sourceFields = FlattenJson(sourceObj);
             var destFields = FlattenJson(destObj);
 
@@ -49,17 +48,15 @@ public class MappingSuggestionService
                 {
                     var normalizedDest = NormalizeKey(dest.Key);
 
-                    // 2. Strict & Safe Substring Matching (Prevents "id" from matching "order_id")
                     if (IsSafeMatch(normalizedSrc, normalizedDest))
                     {
                         suggestions.Add(new FieldMappingRule
                         {
-                            SourceKey = src.Key,         // Keeps the exact dot-notation path (e.g., customer.email)
-                            DestinationKey = dest.Key,    // Keeps the exact target path
-                            TransformationType = "Direct" // Matches legacy domain model
+                            SourceKey = src.Key,
+                            TargetKey = dest.Key, // Aligned with Domain Model
+                            Type = "string"       // Aligned with Domain Model
                         });
 
-                        // Remove matched destination to prevent duplicate mappings to the same target field
                         destFields.Remove(dest.Key);
                         break;
                     }
@@ -68,7 +65,6 @@ public class MappingSuggestionService
         }
         catch (Exception ex)
         {
-            // 3. Exception Visibility
             _logger.LogError(ex, "Failed to generate mapping suggestions due to an unexpected parsing error.");
             throw new InvalidOperationException("Failed to analyze schema schemas.", ex);
         }
@@ -76,7 +72,6 @@ public class MappingSuggestionService
         return suggestions;
     }
 
-    // Recursively extracts paths like "customer.shipping_address.city"
     private Dictionary<string, string> FlattenJson(JsonObject node, string prefix = "")
     {
         var result = new Dictionary<string, string>();
@@ -95,7 +90,6 @@ public class MappingSuggestionService
             }
             else if (kvp.Value is JsonArray)
             {
-                // Arrays require specialized mapping rules, mapped at the parent level
                 result[path] = "array";
             }
             else
@@ -108,20 +102,14 @@ public class MappingSuggestionService
 
     private string NormalizeKey(string key)
     {
-        // Extract the final node name if it's a dot-notation path (e.g., "customer.first_name" -> "first_name")
         var leafNode = key.Split('.').Last();
         return leafNode.ToLowerInvariant().Replace("_", "").Replace("-", "");
     }
 
     private bool IsSafeMatch(string src, string dest)
     {
-        // Exact match (e.g., "firstname" == "firstname")
         if (src == dest) return true;
-
-        // Prevent short ambiguous keys from causing catastrophic false positives
         if (src.Length < 4 || dest.Length < 4) return false;
-
-        // Safe substring match: Ensure one is a significant part of the other (e.g., "customername" and "name")
         return src.EndsWith(dest) || dest.EndsWith(src);
     }
 }

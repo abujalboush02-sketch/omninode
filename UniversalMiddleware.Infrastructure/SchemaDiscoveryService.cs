@@ -2,9 +2,9 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.Domain;
-using UniversalMiddleware.Infrastructure;
+using UniversalMiddleware.Application; // Grants access to interfaces
 
-namespace UniversalMiddleware.Application;
+namespace UniversalMiddleware.Infrastructure; // Relocated namespace
 
 public class SchemaDiscoveryService : ISchemaDiscoveryService
 {
@@ -17,7 +17,6 @@ public class SchemaDiscoveryService : ISchemaDiscoveryService
 
     public async Task<IEnumerable<SchemaTemplate>> GetStandardTemplatesAsync()
     {
-        // Fetches the real schemas populated by your DataSeeder
         return await _context.SchemaTemplates.AsNoTracking().ToListAsync();
     }
 
