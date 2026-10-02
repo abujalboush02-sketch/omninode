@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Domain;
+using UniversalMiddleware.API.Attributes;
 
 namespace UniversalMiddleware.API.Controllers;
 
@@ -50,6 +51,19 @@ public class WebhooksController : ControllerBase
             using var transaction = await _dbContext.Database.BeginTransactionAsync();
             try
             {
+                // Check Billing & Account Lifecycle Status
+                var tenant = await _dbContext.Tenants
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(t => t.Id == authTenantId);
+
+                if (tenant == null)
+                    return NotFound(new { Error = "Tenant record not found." });
+
+                if (tenant.BillingStatus == "Suspended")
+                {
+                    return StatusCode(402, new { Error = "Tenant account is suspended due to unpaid invoices. Webhook processing is paused." });
+                }
+
                 // 3. Thread-Safe Quota Increment (Avoids Race Conditions)
                 var rowsAffected = await _dbContext.Tenants
                     .Where(t => t.Id == authTenantId && t.TasksUsedThisMonth < t.MonthlyTaskQuota)
@@ -107,13 +121,31 @@ public class WebhooksController : ControllerBase
             using var transaction = await _dbContext.Database.BeginTransactionAsync();
             try
             {
+                // Check Billing & Account Lifecycle Status
+                var tenant = await _dbContext.Tenants
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(t => t.Id == authTenantId);
+
+                if (tenant == null)
+                    return NotFound(new { Error = "Tenant record not found." });
+
+                if (tenant.BillingStatus == "Suspended")
+                {
+                    return StatusCode(402, new { Error = "Tenant account is suspended due to unpaid invoices. Webhook processing is paused." });
+                }
+
+                // Meter both standard tasks and AI unstructured extraction tasks atomically
                 var rowsAffected = await _dbContext.Tenants
-                    .Where(t => t.Id == authTenantId && t.TasksUsedThisMonth < t.MonthlyTaskQuota)
-                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1));
+                    .Where(t => t.Id == authTenantId &&
+                                t.TasksUsedThisMonth < t.MonthlyTaskQuota &&
+                                t.AiTasksUsedThisMonth < t.AiTasksQuota)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1)
+                        .SetProperty(t => t.AiTasksUsedThisMonth, t => t.AiTasksUsedThisMonth + 1));
 
                 if (rowsAffected == 0)
                 {
-                    return StatusCode(429, new { Error = "Monthly task quota exceeded. Please upgrade your plan." });
+                    return StatusCode(429, new { Error = "Monthly AI or task quota exceeded. Please upgrade your plan." });
                 }
 
                 // Safely wrap the unstructured payload alongside the userId identifier

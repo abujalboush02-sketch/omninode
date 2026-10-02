@@ -1,3 +1,4 @@
+global using UniversalMiddleware.API.Attributes;
 using System;
 using System.Text;
 using System.Threading.Tasks;
@@ -15,6 +16,7 @@ using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Application;
 using UniversalMiddleware.Application.Services;
 using UniversalMiddleware.API;
+
 
 var builder = WebApplication.CreateBuilder(args);
 

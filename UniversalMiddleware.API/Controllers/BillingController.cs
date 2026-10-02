@@ -1,180 +1,163 @@
 using System;
-using System.Text.Json;
+using System.Security.Claims;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Domain;
-using UniversalMiddleware.API.Attributes;
+using UniversalMiddleware.Infrastructure;
 
 namespace UniversalMiddleware.API.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
-[ApiKeyAuth] // Guarantees HttpContext.Items["TenantId"] is populated for valid tenants
-public class WebhooksController : ControllerBase
+public class BillingController : ControllerBase
 {
-    private readonly AppDbContext _dbContext;
+    private readonly AppDbContext _context;
 
-    public WebhooksController(AppDbContext dbContext)
+    public BillingController(AppDbContext context)
     {
-        _dbContext = dbContext;
+        _context = context;
     }
 
-    private Guid GetAuthenticatedTenantId()
+    /// <summary>
+    /// Generates an invoice and payment instructions (CliQ, Wire, Cash) with a unique reference code.
+    /// </summary>
+    [HttpPost("generate-invoice")]
+    public async Task<IActionResult> GenerateInvoice([FromBody] GenerateInvoiceRequest request)
     {
-        if (HttpContext.Items.TryGetValue("TenantId", out var tenantIdObj) && tenantIdObj is Guid tenantId)
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+            return Unauthorized();
+
+        var user = await _context.Users.FindAsync(userId);
+        if (user == null)
+            return NotFound(new { Error = "User not found." });
+
+        Guid accountId;
+        string accountType;
+
+        if (user.Role == UserRole.AgencyOwner && user.AgencyId.HasValue)
         {
-            return tenantId;
+            accountId = user.AgencyId.Value;
+            accountType = "Agency";
         }
-        throw new UnauthorizedAccessException("Tenant ID is missing from the authenticated context.");
+        else if (user.TenantId.HasValue)
+        {
+            accountId = user.TenantId.Value;
+            accountType = "Tenant";
+        }
+        else
+        {
+            return BadRequest(new { Error = "No billable organization mapped to this user." });
+        }
+
+        // Format: INV-YYYY-RANDOM (e.g., INV-2026-AB12)
+        var referenceCode = $"INV-{DateTime.UtcNow.Year}-{Guid.NewGuid().ToString("N")[..6].ToUpper()}";
+
+        var invoice = new PaymentInvoice
+        {
+            AccountId = accountId,
+            AccountType = accountType,
+            Amount = request.Amount,
+            Currency = request.Currency ?? "JOD",
+            PaymentMethod = request.PaymentMethod,
+            ReferenceCode = referenceCode,
+            Status = "Unpaid"
+        };
+
+        _context.PaymentInvoices.Add(invoice);
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            InvoiceId = invoice.Id,
+            invoice.ReferenceCode,
+            invoice.Amount,
+            invoice.Currency,
+            invoice.PaymentMethod,
+            Instructions = GetPaymentInstructions(request.PaymentMethod, referenceCode)
+        });
     }
 
-    [HttpPost("structured/{endpointId:guid}")]
-    public async Task<IActionResult> ProcessStructured(Guid endpointId, [FromBody] JsonElement payload)
+    /// <summary>
+    /// SuperAdmin only: Approves an invoice, activates the account, and extends the renewal date.
+    /// </summary>
+    [Authorize(Roles = "SuperAdmin")]
+    [HttpPost("approve-invoice/{invoiceId}")]
+    public async Task<IActionResult> ApproveInvoice(Guid invoiceId)
     {
-        var authTenantId = GetAuthenticatedTenantId();
+        var adminIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        Guid.TryParse(adminIdClaim, out var adminId);
 
-        // 1. Cross-Tenant Data Injection Prevention
-        var endpointExists = await _dbContext.Endpoints
-            .AsNoTracking()
-            .AnyAsync(e => e.Id == endpointId && e.TenantId == authTenantId);
+        var invoice = await _context.PaymentInvoices.FindAsync(invoiceId);
+        if (invoice == null)
+            return NotFound(new { Error = "Invoice not found." });
 
-        if (!endpointExists)
-            return NotFound(new { Error = "Endpoint not found or you do not have permission to access it." });
+        if (invoice.Status == "Confirmed")
+            return BadRequest(new { Error = "Invoice is already confirmed." });
 
-        // 2. Resilience: Wrap explicit transaction in Execution Strategy (Required by EnableRetryOnFailure)
-        var strategy = _dbContext.Database.CreateExecutionStrategy();
+        invoice.Status = "Confirmed";
+        invoice.PaidAt = DateTime.UtcNow;
+        invoice.ConfirmedByAdminId = adminId;
 
-        var result = await strategy.ExecuteAsync(async () =>
+        // Apply activation based on account type
+        if (invoice.AccountType == "Agency")
         {
-            using var transaction = await _dbContext.Database.BeginTransactionAsync();
-            try
+            var agency = await _context.Agencies.FindAsync(invoice.AccountId);
+            if (agency != null)
             {
-                // Check Billing & Account Lifecycle Status
-                var tenant = await _dbContext.Tenants
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(t => t.Id == authTenantId);
-
-                if (tenant == null)
-                    return NotFound(new { Error = "Tenant record not found." });
-
-                if (tenant.BillingStatus == "Suspended")
-                {
-                    return StatusCode(402, new { Error = "Tenant account is suspended due to unpaid invoices. Webhook processing is paused." });
-                }
-
-                // 3. Thread-Safe Quota Increment (Avoids Race Conditions)
-                var rowsAffected = await _dbContext.Tenants
-                    .Where(t => t.Id == authTenantId && t.TasksUsedThisMonth < t.MonthlyTaskQuota)
-                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1));
-
-                if (rowsAffected == 0)
-                {
-                    return StatusCode(429, new { Error = "Monthly task quota exceeded. Please upgrade your plan." });
-                }
-
-                // 4. Memory-Optimized Payload Extraction
-                var rawEvent = new RawEvent
-                {
-                    EndpointId = endpointId,
-                    TenantId = authTenantId,
-                    Payload = payload.GetRawText(), // Eliminates generic ToString() overhead
-                    Status = "Pending",
-                    RetryCount = 0,
-                    MaxRetries = 5,
-                    ReceivedAt = DateTime.UtcNow
-                };
-
-                _dbContext.RawEvents.Add(rawEvent);
-                await _dbContext.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                return Accepted(new { Message = "Webhook queued successfully for processing." });
+                agency.BillingStatus = "Active";
+                agency.NextRenewalDate = DateTime.UtcNow.AddDays(30);
+                agency.TasksUsedThisMonth = 0;
+                agency.AiTasksUsedThisMonth = 0;
             }
-            catch
+        }
+        else
+        {
+            var tenant = await _context.Tenants.FindAsync(invoice.AccountId);
+            if (tenant != null)
             {
-                await transaction.RollbackAsync();
-                throw;
+                tenant.BillingStatus = "Active";
+                tenant.NextRenewalDate = DateTime.UtcNow.AddDays(30);
+                tenant.TasksUsedThisMonth = 0;
+                tenant.AiTasksUsedThisMonth = 0;
             }
-        });
+        }
 
-        return result;
+        await _context.SaveChangesAsync();
+
+        return Ok(new { Message = $"Invoice {invoice.ReferenceCode} approved. Account activated for 30 days." });
     }
 
-    [HttpPost("unstructured/{endpointId:guid}")]
-    public async Task<IActionResult> ProcessUnstructured(Guid endpointId, [FromQuery] string userId, [FromBody] JsonElement payload)
+    private static object GetPaymentInstructions(string method, string refCode)
     {
-        var authTenantId = GetAuthenticatedTenantId();
-
-        var endpointExists = await _dbContext.Endpoints
-            .AsNoTracking()
-            .AnyAsync(e => e.Id == endpointId && e.TenantId == authTenantId);
-
-        if (!endpointExists)
-            return NotFound(new { Error = "Endpoint not found or you do not have permission to access it." });
-
-        var strategy = _dbContext.Database.CreateExecutionStrategy();
-
-        var result = await strategy.ExecuteAsync(async () =>
+        return method.ToLowerInvariant() switch
         {
-            using var transaction = await _dbContext.Database.BeginTransactionAsync();
-            try
+            "cliq" => new
             {
-                // Check Billing & Account Lifecycle Status
-                var tenant = await _dbContext.Tenants
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(t => t.Id == authTenantId);
-
-                if (tenant == null)
-                    return NotFound(new { Error = "Tenant record not found." });
-
-                if (tenant.BillingStatus == "Suspended")
-                {
-                    return StatusCode(402, new { Error = "Tenant account is suspended due to unpaid invoices. Webhook processing is paused." });
-                }
-
-                // Meter both standard tasks and AI unstructured extraction tasks atomically
-                var rowsAffected = await _dbContext.Tenants
-                    .Where(t => t.Id == authTenantId &&
-                                t.TasksUsedThisMonth < t.MonthlyTaskQuota &&
-                                t.AiTasksUsedThisMonth < t.AiTasksQuota)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1)
-                        .SetProperty(t => t.AiTasksUsedThisMonth, t => t.AiTasksUsedThisMonth + 1));
-
-                if (rowsAffected == 0)
-                {
-                    return StatusCode(429, new { Error = "Monthly AI or task quota exceeded. Please upgrade your plan." });
-                }
-
-                // Safely wrap the unstructured payload alongside the userId identifier
-                var wrappedPayload = JsonSerializer.Serialize(new { userId, payload });
-
-                var rawEvent = new RawEvent
-                {
-                    EndpointId = endpointId,
-                    TenantId = authTenantId,
-                    Payload = wrappedPayload,
-                    Status = "Pending",
-                    RetryCount = 0,
-                    MaxRetries = 5,
-                    ReceivedAt = DateTime.UtcNow
-                };
-
-                _dbContext.RawEvents.Add(rawEvent);
-                await _dbContext.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                return Accepted(new { Message = "Unstructured webhook queued successfully for parsing." });
-            }
-            catch
+                Method = "CliQ",
+                Alias = "OMNINODE",
+                Bank = "Arab Bank",
+                RequiredMemo = refCode,
+                Note = "Please paste the exact ReferenceCode into the transfer description."
+            },
+            "bankwire" => new
             {
-                await transaction.RollbackAsync();
-                throw;
+                Method = "Bank Wire",
+                Beneficiary = "OmniNode Middleware Systems",
+                IBAN = "JO00ARAB0000000000000000000000",
+                SWIFT = "ARABJOAX",
+                RequiredMemo = refCode
+            },
+            _ => new
+            {
+                Method = "Cash",
+                Note = "Payment arranged directly with account manager. Quote reference: " + refCode
             }
-        });
-
-        return result;
+        };
     }
 }
+
+public record GenerateInvoiceRequest(decimal Amount, string? Currency, string PaymentMethod);
