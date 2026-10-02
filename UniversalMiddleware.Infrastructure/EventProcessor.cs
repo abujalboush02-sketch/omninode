@@ -1,12 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using UniversalMiddleware.Domain;
-using UniversalMiddleware.Application; // Grants access to interfaces
+using UniversalMiddleware.Application;
 
-namespace UniversalMiddleware.Infrastructure; // Relocated namespace
+namespace UniversalMiddleware.Infrastructure;
 
 public class EventProcessor : IEventProcessor
 {
@@ -42,10 +44,17 @@ public class EventProcessor : IEventProcessor
         if (endpoint.Connection == null)
             throw new InvalidOperationException($"Routing failed: No active connection mapped to Endpoint {evt.EndpointId}.");
 
-        var rules = await _dbContext.FieldMappingRules
-            .Where(r => r.EndpointId == evt.EndpointId)
+        // Fetch the upgraded JSONB mappings and deserialize them into the rules engine
+        var mapping = await _dbContext.Mappings
             .AsNoTracking()
-            .ToListAsync();
+            .FirstOrDefaultAsync(m => m.ConnectionId == endpoint.Connection.Id);
+
+        var rules = new List<FieldMappingRule>();
+
+        if (mapping != null && !string.IsNullOrWhiteSpace(mapping.FieldMappings))
+        {
+            rules = JsonSerializer.Deserialize<List<FieldMappingRule>>(mapping.FieldMappings) ?? new List<FieldMappingRule>();
+        }
 
         if (!rules.Any())
             _logger.LogWarning("Event {EventId} has no mapping rules. Payload will be forwarded as-is.", evt.Id);
