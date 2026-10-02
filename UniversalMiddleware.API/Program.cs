@@ -1,15 +1,19 @@
 using System;
+using System.Text;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
 using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Application;
+using UniversalMiddleware.Application.Services;
 using UniversalMiddleware.API;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -73,6 +77,9 @@ builder.Services.AddHttpClient<ILlamaAgentService, LlamaAgentService>(client =>
 });
 
 // 5. Dependency Injection
+builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
+builder.Services.AddScoped<ITokenService, TokenService>();
+
 builder.Services.AddScoped<ISchemaDiscoveryService, SchemaDiscoveryService>();
 builder.Services.AddScoped<ITransformationService, TransformationService>();
 builder.Services.AddScoped<IConnectionWizardService, ConnectionWizardService>();
@@ -84,6 +91,30 @@ builder.Services.AddScoped<MappingSuggestionService>();
 builder.Services.AddHttpClient("OutboundCrmClient");
 
 builder.Services.AddHostedService<EventProcessingWorker>();
+builder.Services.AddHostedService<BillingLifecycleWorker>();
+
+// JWT Authentication Setup
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "OmniNode_Fallback_Super_Secret_Jwt_Encryption_Key_2026";
+var keyBytes = Encoding.UTF8.GetBytes(jwtKey);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.RequireHttpsMetadata = false;
+    options.SaveToken = true;
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+        ValidateIssuer = false,
+        ValidateAudience = false,
+        ClockSkew = TimeSpan.Zero
+    };
+});
 
 // 6. APILayer & Docker Monitoring (Health Checks)
 builder.Services.AddHealthChecks()
@@ -145,6 +176,8 @@ app.UseSwaggerUI(c =>
 
 app.UseCors("OmniNodeCorsPolicy");
 app.UseRouting();
+
+app.UseAuthentication();
 app.UseAuthorization();
 
 // Map the health check endpoint

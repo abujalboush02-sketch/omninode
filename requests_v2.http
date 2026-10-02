@@ -1,0 +1,332 @@
+### ==========================================================================
+### OMNINODE MASTER INTEGRATION TEST SUITE (V2)
+### ==========================================================================
+@baseUrl = https://omni.mohammad-abujalboush.com/api
+# Fallback local testing: @baseUrl = http://localhost:8080/api
+
+@masterKey = um_master_secret_key_123
+
+# Dynamic Auth Tokens (Populate after running Phase 1)
+@superAdminToken = eyJhbGciOi...
+@agencyToken = eyJhbGciOi...
+@merchantToken = eyJhbGciOi...
+
+# Dynamic Identifiers (Populate from responses as you proceed)
+@agencyId = 00000000-0000-0000-0000-000000000000
+@subTenantId = 00000000-0000-0000-0000-000000000000
+@merchantTenantId = 00000000-0000-0000-0000-000000000000
+@tenantApiKey = um_live_xxxxxxxxxxxxxxxxxxxxxxxx
+@invoiceId = 00000000-0000-0000-0000-000000000000
+@sourceEndpointId = 00000000-0000-0000-0000-000000000000
+@destEndpointId = 00000000-0000-0000-0000-000000000000
+@connectionId = 00000000-0000-0000-0000-000000000000
+
+
+### ==========================================================================
+### PHASE 1: IDENTITY, JWT SESSIONS & HYBRID AUTH
+### ==========================================================================
+
+### 1. Register Super Admin User
+POST {{baseUrl}}/Auth/register
+Content-Type: application/json
+
+{
+  "email": "superadmin@omninode.io",
+  "password": "SuperSecurePassword2026!",
+  "role": 0,
+  "organizationName": "OmniNode Global Headquarters",
+  "agencyId": null
+}
+
+### 2. Register Agency Owner User (Starts as PendingPayment)
+POST {{baseUrl}}/Auth/register
+Content-Type: application/json
+
+{
+  "email": "owner@velocityintegrations.com",
+  "password": "AgencyOwnerPass2026!",
+  "role": 1,
+  "organizationName": "Velocity Integrations Agency",
+  "agencyId": null
+}
+
+### 3. Register Standalone Tenant User (Self-Serve Merchant)
+POST {{baseUrl}}/Auth/register
+Content-Type: application/json
+
+{
+  "email": "basel@ammanbakery.com",
+  "password": "MerchantPass2026!",
+  "role": 2,
+  "organizationName": "Amman Artisan Bakery",
+  "agencyId": null
+}
+
+### 4. Login - Super Admin Session (Copy 'token' to @superAdminToken)
+POST {{baseUrl}}/Auth/login
+Content-Type: application/json
+
+{
+  "email": "superadmin@omninode.io",
+  "password": "SuperSecurePassword2026!"
+}
+
+### 5. Login - Agency Owner Session (Copy 'token' to @agencyToken & 'agencyId' to @agencyId)
+POST {{baseUrl}}/Auth/login
+Content-Type: application/json
+
+{
+  "email": "owner@velocityintegrations.com",
+  "password": "AgencyOwnerPass2026!"
+}
+
+### 6. Login - Merchant Session (Copy 'token' to @merchantToken & 'tenantId' to @merchantTenantId)
+POST {{baseUrl}}/Auth/login
+Content-Type: application/json
+
+{
+  "email": "basel@ammanbakery.com",
+  "password": "MerchantPass2026!"
+}
+
+### 7. Verify Caller Profile & Permissions
+GET {{baseUrl}}/Auth/me
+Authorization: Bearer {{agencyToken}}
+
+
+### ==========================================================================
+### PHASE 2: MANUAL BILLING LIFECYCLE (CLIQ / WIRE / CASH)
+### ==========================================================================
+
+### 8. Agency Generates CliQ Invoice for Subscription Renewal
+POST {{baseUrl}}/Billing/generate-invoice
+Authorization: Bearer {{agencyToken}}
+Content-Type: application/json
+
+{
+  "amount": 249.00,
+  "currency": "JOD",
+  "paymentMethod": "CliQ"
+}
+
+### 9. Standalone Merchant Generates Bank Wire Invoice
+POST {{baseUrl}}/Billing/generate-invoice
+Authorization: Bearer {{merchantToken}}
+Content-Type: application/json
+
+{
+  "amount": 49.00,
+  "currency": "JOD",
+  "paymentMethod": "BankWire"
+}
+
+### 10. Super Admin Approves Invoice & Activates Agency (Pass @invoiceId from #8)
+POST {{baseUrl}}/Billing/approve-invoice/{{invoiceId}}
+Authorization: Bearer {{superAdminToken}}
+
+
+### ==========================================================================
+### PHASE 3: AGENCY FLEET MANAGEMENT & SUB-TENANT PROVISIONING
+### ==========================================================================
+
+### 11. View Agency Dashboard Overview (Quota & Sub-Tenant Utilization)
+GET {{baseUrl}}/Agencies/my-agency
+Authorization: Bearer {{agencyToken}}
+
+### 12. Agency Provisions Sub-Tenant (Client 1: Retail Client)
+POST {{baseUrl}}/Agencies/sub-tenants
+Authorization: Bearer {{agencyToken}}
+Content-Type: application/json
+
+{
+  "name": "Luxury Perfumes Retail",
+  "ownerEmail": "client1@perfumery.com",
+  "allocatedTaskQuota": 5000,
+  "allocatedAiQuota": 250
+}
+
+### 13. Agency Provisions Sub-Tenant (Client 2: Pizza Delivery)
+POST {{baseUrl}}/Agencies/sub-tenants
+Authorization: Bearer {{agencyToken}}
+Content-Type: application/json
+
+{
+  "name": "Rabyeh Fast Pizza",
+  "ownerEmail": "orders@fastpizza.jo",
+  "allocatedTaskQuota": 3500,
+  "allocatedAiQuota": 500
+}
+
+### 14. List All Sub-Tenants Under Agency Umbrella
+GET {{baseUrl}}/Agencies/sub-tenants
+Authorization: Bearer {{agencyToken}}
+
+### 15. Update Sub-Tenant Quotas Dynamically
+PUT {{baseUrl}}/Agencies/sub-tenants/{{subTenantId}}/quotas
+Authorization: Bearer {{agencyToken}}
+Content-Type: application/json
+
+{
+  "monthlyTaskQuota": 12000,
+  "aiTasksQuota": 750
+}
+
+### 16. Generate Automated Ingestion API Key for Sub-Tenant (Copy output to @tenantApiKey)
+POST {{baseUrl}}/Tenants/{{subTenantId}}/generate-key
+X-Api-Key: {{masterKey}}
+
+
+### ==========================================================================
+### PHASE 4: MACHINE PIPELINE CONFIGURATION (SOURCE -> CRM MAPPINGS)
+### ==========================================================================
+
+### 17. Create Source Endpoint (Shopify E-Commerce Store)
+POST {{baseUrl}}/Endpoints
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "platformName": "Shopify",
+  "endpointType": "Source",
+  "webhookUrl": "https://omni.mohammad-abujalboush.com/api/webhooks/structured/will-be-assigned",
+  "authHeaders": ""
+}
+
+### 18. Create Destination Endpoint (HubSpot CRM)
+POST {{baseUrl}}/Endpoints
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "platformName": "HubSpot",
+  "endpointType": "Destination",
+  "webhookUrl": "https://api.hubapi.com/crm/v3/objects/deals",
+  "authHeaders": "Bearer"
+}
+
+### 19. Create Destination Auth Credentials
+POST {{baseUrl}}/Credentials
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "endpointId": "{{destEndpointId}}",
+  "baseUrl": "https://api.hubapi.com/crm/v3/objects/deals",
+  "apiKey": "test_hubspot_token_live_or_sandbox",
+  "authType": "Bearer"
+}
+
+### 20. Establish Active Connection Between Source and Destination
+POST {{baseUrl}}/Connections
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "sourceEndpointId": "{{sourceEndpointId}}",
+  "destinationEndpointId": "{{destEndpointId}}",
+  "status": "Active",
+  "baseUrl": "https://api.hubapi.com/crm/v3/objects/deals",
+  "apiKey": "test_hubspot_token_live_or_sandbox",
+  "authType": "Bearer"
+}
+
+### 21. Configure Field Mappings (JSONB Engine with Math Rules)
+POST {{baseUrl}}/Mappings/configure
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "connectionId": "{{connectionId}}",
+  "rules": [
+    {
+      "endpointId": "{{sourceEndpointId}}",
+      "sourceKey": "customer.first_name",
+      "targetKey": "firstname",
+      "type": "string"
+    },
+    {
+      "endpointId": "{{sourceEndpointId}}",
+      "sourceKey": "total_price",
+      "targetKey": "amount",
+      "type": "number",
+      "math": "/100"
+    }
+  ]
+}
+
+
+### ==========================================================================
+### PHASE 5: REAL-TIME INGESTION, AI PARSING & QUOTA GUARDS
+### ==========================================================================
+
+### 22. Ingest Standard Structured Webhook (Shopify Order)
+POST {{baseUrl}}/webhooks/structured/{{sourceEndpointId}}
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "id": "10029384",
+  "customer": {
+    "first_name": "Tariq",
+    "email": "tariq@example.jo"
+  },
+  "total_price": "7500"
+}
+
+### 23. Ingest Unstructured AI Webhook (WhatsApp Conversational Order)
+POST {{baseUrl}}/webhooks/unstructured/{{sourceEndpointId}}?userId=962795551234
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "message": "Marhaba, I need 2 boxes of luxury amber perfume sent to Abdoun, Amman. Phone is 0795551234."
+}
+
+### 24. Test Quota Exhaustion / 429 Sentinel (Verification)
+# Note: When TasksUsedThisMonth reaches MonthlyTaskQuota, this endpoint must reject with HTTP 429
+POST {{baseUrl}}/webhooks/structured/{{sourceEndpointId}}
+X-Api-Key: {{tenantApiKey}}
+Content-Type: application/json
+
+{
+  "id": "99999999",
+  "customer": { "first_name": "QuotaBreaker" },
+  "total_price": "100"
+}
+
+
+### ==========================================================================
+### PHASE 6: OBSERVABILITY, AUDIT LOGS, DLQ & SUPER ADMIN CONTROL
+### ==========================================================================
+
+### 25. Tenant/Agency Views Ingestion Log History
+GET {{baseUrl}}/Events/logs
+X-Api-Key: {{tenantApiKey}}
+
+### 26. Tenant/Agency Inspects Pending Processing Queue
+GET {{baseUrl}}/Events/pending
+X-Api-Key: {{tenantApiKey}}
+
+### 27. Tenant/Agency Inspects Failed Deliveries
+GET {{baseUrl}}/Events/failed
+X-Api-Key: {{tenantApiKey}}
+
+### 28. Super Admin Mission Control - Telemetry Dashboard
+GET {{baseUrl}}/Admin/telemetry
+Authorization: Bearer {{superAdminToken}}
+
+### 29. Super Admin Mission Control - Global Agency Ledger
+GET {{baseUrl}}/Admin/agencies
+Authorization: Bearer {{superAdminToken}}
+
+### 30. Super Admin Mission Control - Inspect Global Dead-Letter Queue (DLQ)
+GET {{baseUrl}}/Admin/dead-letter-queue?page=1&pageSize=50
+Authorization: Bearer {{superAdminToken}}
+
+### 31. Super Admin Bulk Reprocessor (Re-queue all failed CRM payloads)
+POST {{baseUrl}}/Admin/reprocess-failed
+Authorization: Bearer {{superAdminToken}}
+
+### 32. Cascade Deletion Teardown (Removes source endpoint, connections & rules)
+DELETE {{baseUrl}}/Endpoints/{{sourceEndpointId}}
+X-Api-Key: {{tenantApiKey}}

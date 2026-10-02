@@ -17,6 +17,10 @@ public class AppDbContext : DbContext
     public DbSet<IncomingEvent> IncomingEvents { get; set; }
     public DbSet<ConversationSession> ConversationSessions { get; set; }
     public DbSet<OrderDraft> OrderDrafts { get; set; }
+    public DbSet<Agency> Agencies => Set<Agency>();
+    public DbSet<User> Users => Set<User>();
+    public DbSet<PaymentInvoice> PaymentInvoices => Set<PaymentInvoice>();
+    public DbSet<UsageLedger> UsageLedgers => Set<UsageLedger>();
 
     // 1. Registered Missing DbSet for EventProcessor Dependency
     public DbSet<FieldMappingRule> FieldMappingRules { get; set; }
@@ -72,5 +76,35 @@ public class AppDbContext : DbContext
             .WithOne()
             .HasForeignKey<Connection>(c => c.SourceEndpointId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // User email uniqueness
+        modelBuilder.Entity<User>()
+            .HasIndex(u => u.Email)
+            .IsUnique();
+
+        // Invoice reference uniqueness for easy reconciliation
+        modelBuilder.Entity<PaymentInvoice>()
+            .HasIndex(p => p.ReferenceCode)
+            .IsUnique();
+
+        // Agency -> Tenants relationship (Restrict cascade delete to protect client data)
+        modelBuilder.Entity<Tenant>()
+            .HasOne(t => t.Agency)
+            .WithMany(a => a.Tenants)
+            .HasForeignKey(t => t.AgencyId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // User relationships
+        modelBuilder.Entity<User>()
+            .HasOne(u => u.Agency)
+            .WithMany(a => a.Users)
+            .HasForeignKey(u => u.AgencyId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<User>()
+            .HasOne(u => u.Tenant)
+            .WithMany()
+            .HasForeignKey(u => u.TenantId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }
