@@ -1,12 +1,12 @@
 @baseUrl = https://omni.mohammad-abujalboush.com/api
 # Fallback local testing: @baseUrl = http://localhost:3030/api
 
-@masterKey = YOUR_MASTER_API_KEY
-@tenantKey = YOUR_GENERATED_TENANT_KEY
-@tenantId = YOUR_TENANT_ID
-@sourceEndpointId = YOUR_SOURCE_ENDPOINT_ID
-@destEndpointId = YOUR_DESTINATION_ENDPOINT_ID
-@connectionId = YOUR_CONNECTION_ID
+@masterKey = your_super_secret_master_key_123
+@tenantKey = um_live_mbOVt00kae80JuvLByEj9pYa
+@tenantId = 18f73e94-34fa-4d4a-9515-5ac38233d077
+@sourceEndpointId = 3d36234a-b7b8-4410-8b5f-48247b361355
+@destEndpointId = d297e24d-83c3-4c29-a4fe-dfd3416b56c8
+@connectionId = dc1cc063-60be-46eb-9418-299fb963c52b
 
 # ==========================================
 # PHASE 1: INFRASTRUCTURE SETUP (ADMIN ONLY)
@@ -18,11 +18,14 @@ X-Api-Key: {{masterKey}}
 Content-Type: application/json
 
 {
-  "name": "Alpha E-Commerce Agency",
-  "ownerName": "Client Admin",
-  "ownerEmail": "admin@alpha-agency.com",
-  "planType": "SaaS",
-  "subscriptionTier": "Pro"
+  "name": "OmniNode Production Tenant",
+  "ownerName": "System Admin",
+  "ownerEmail": "admin@example.com",
+  "planType": "Enterprise",
+  "subscriptionTier": "Tier 1",
+  "monthlyTaskQuota": 10000,
+  "tasksUsedThisMonth": 0,
+  "apiKeyHash": "pending_generation"
 }
 
 ### 2. Generate Tenant API Key (Requires Master Key)
@@ -78,7 +81,11 @@ Content-Type: application/json
 
 {
   "sourceEndpointId": "{{sourceEndpointId}}",
-  "destinationEndpointId": "{{destEndpointId}}"
+  "destinationEndpointId": "{{destEndpointId}}",
+  "status": "Active",
+  "baseUrl": "https://api.hubapi.com/crm/v3/objects/deals",
+  "apiKey": "hubspot_pat_token_here",
+  "authType": "Bearer"
 }
 
 ### 7. Get AI Mapping Suggestions
@@ -109,12 +116,13 @@ Content-Type: application/json
   ]
 }
 
-
+### 
 # ==========================================
 # PHASE 3: WEBHOOK INGESTION & PIPELINE
 # ==========================================
 
 ### 9. Ingest Structured Webhook (e.g., from Shopify)
+
 POST {{baseUrl}}/webhooks/structured/{{sourceEndpointId}}
 X-Api-Key: {{tenantKey}}
 Content-Type: application/json

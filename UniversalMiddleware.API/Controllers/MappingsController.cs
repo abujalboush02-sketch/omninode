@@ -63,7 +63,13 @@ public class MappingsController : ControllerBase
         var mapping = await _context.Mappings.FirstOrDefaultAsync(m => m.ConnectionId == request.ConnectionId);
         if (mapping == null)
         {
-            mapping = new Mapping { ConnectionId = request.ConnectionId };
+            // FIX: Explicitly initialize required jsonb columns with valid empty JSON
+            mapping = new Mapping
+            {
+                ConnectionId = request.ConnectionId,
+                SourceSchema = "{}",
+                DestinationSchema = "{}"
+            };
             _context.Mappings.Add(mapping);
         }
 
