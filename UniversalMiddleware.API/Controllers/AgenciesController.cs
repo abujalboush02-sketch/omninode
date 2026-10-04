@@ -140,16 +140,24 @@ public class AgenciesController : ControllerBase
             });
         }
 
+        // Generate a unique API key hash to satisfy the unique database index constraint
+        var rawApiKey = $"um_live_{Guid.NewGuid():N}";
+        var hashedApiKey = ComputeSha256Hash(rawApiKey);
+
         var tenant = new Tenant
         {
             Name = request.Name,
             OwnerEmail = request.OwnerEmail,
+            OwnerName = request.Name, // Satisfies required field
+            PlanType = "AgencyManaged", // Satisfies required field
+            ApiKeyHash = hashedApiKey, // Satisfies unique constraint
             AgencyId = agency.Id,
             TenantType = "AgencySubTenant",
             SubscriptionTier = agency.SubscriptionTier,
             MonthlyTaskQuota = request.AllocatedTaskQuota ?? 5000,
             AiTasksQuota = request.AllocatedAiQuota ?? 200,
-            BillingStatus = "Active"
+            BillingStatus = "Active",
+            NextRenewalDate = agency.NextRenewalDate
         };
 
         _context.Tenants.Add(tenant);
@@ -165,6 +173,18 @@ public class AgenciesController : ControllerBase
             tenant.AiTasksQuota,
             tenant.BillingStatus
         });
+    }
+
+    private static string ComputeSha256Hash(string rawData)
+    {
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        var bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
+        var builder = new System.Text.StringBuilder();
+        foreach (var b in bytes)
+        {
+            builder.Append(b.ToString("x2"));
+        }
+        return builder.ToString();
     }
 
     /// <summary>
