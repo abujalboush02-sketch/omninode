@@ -13,9 +13,9 @@
 
 # Dynamic Identifiers (Populate from responses as you proceed)
 @agencyId = 4aacdb17-89fb-4179-8627-dbebc50a5310
-@subTenantId = 00000000-0000-0000-0000-000000000000
+@subTenantId = 6b60f433-1ad6-468a-a96e-69520da4c064
 @merchantTenantId = 47e08fba-d5c1-4c01-a691-2513328a2d3b
-@tenantApiKey = um_live_xxxxxxxxxxxxxxxxxxxxxxxx
+@tenantApiKey = um_live_3SPbLMJvcypd9O5dwDrWOkBf 
 @invoiceId = ffb9dd26-8491-4bcb-81b0-02a619bdb0e4
 @sourceEndpointId = 00000000-0000-0000-0000-000000000000
 @destEndpointId = 00000000-0000-0000-0000-000000000000
