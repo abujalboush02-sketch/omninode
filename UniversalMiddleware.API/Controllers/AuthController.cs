@@ -58,6 +58,8 @@ public class AuthController : ControllerBase
             var tenant = new Tenant
             {
                 Name = request.OrganizationName ?? $"{request.Email}'s Workspace",
+                OwnerName = request.OrganizationName ?? emailClean,   
+                PlanType = "Standalone",                              
                 OwnerEmail = emailClean,
                 SubscriptionTier = "Starter",
                 MonthlyTaskQuota = 150,
@@ -104,16 +106,6 @@ public class AuthController : ControllerBase
             user.AgencyId,
             user.TenantId,
             ApiKey = rawApiKey   // shown once; the frontend must store it
-        });
-
-        return Ok(new
-        {
-            Token = token,
-            UserId = user.Id,
-            user.Email,
-            Role = user.Role.ToString(),
-            user.AgencyId,
-            user.TenantId
         });
     }
 

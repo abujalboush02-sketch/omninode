@@ -78,4 +78,22 @@ public class EventsController : ControllerBase
 
         return Ok(events);
     }
+
+    [HttpPost("{id:guid}/retry")]
+    public async Task<IActionResult> Retry(Guid id)
+    {
+        var tenantId = GetAuthenticatedTenantId();
+
+        var count = await _context.RawEvents
+            .Where(e => e.Id == id && e.TenantId == tenantId && e.Status == "Failed_ManualReviewRequired")
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(e => e.Status, "Pending")
+                .SetProperty(e => e.RetryCount, 0)
+                .SetProperty(e => e.LastAttemptAt, (DateTime?)null)
+                .SetProperty(e => e.FailureReason, (string?)null));
+
+        return count == 0
+            ? NotFound(new { Error = "Failed event not found." })
+            : Ok(new { Message = "Event re-queued." });
+    }
 }
