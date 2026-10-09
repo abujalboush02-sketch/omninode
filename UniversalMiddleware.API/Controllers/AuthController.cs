@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -79,6 +79,7 @@ public class AuthController : ControllerBase
         }
 
         _context.Users.Add(user);
+        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🚀 New Signup!\nEmail: {request.Email}\nRole: {request.Role}");
         await _context.SaveChangesAsync();
 
         var token = _tokenService.GenerateToken(user);

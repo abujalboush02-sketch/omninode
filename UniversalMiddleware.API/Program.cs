@@ -1,4 +1,4 @@
-global using UniversalMiddleware.API.Attributes;
+﻿global using UniversalMiddleware.API.Attributes;
 using System;
 using System.Text;
 using System.Threading.Tasks;
@@ -132,17 +132,34 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 // 8. CORS Strategy (Required for Agency Dashboard Frontends)
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("OmniNodeCorsPolicy", policy =>
-    {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
-    });
-});
+builder.Services.AddCors(o => o.AddPolicy("Frontend", p => p
+    .SetIsOriginAllowed(origin =>
+        new Uri(origin).Host == "localhost" ||
+        origin == "https://omni.mohammad-abujalboush.com")
+    .AllowAnyHeader()
+    .AllowAnyMethod()));
 
 var app = builder.Build();
+
+// 1. Initialize Telegram Alerts
+UniversalMiddleware.API.Helpers.TelegramAlert.Initialize(app.Configuration);
+
+// 2. Global Exception Catcher (Alerts you on 500 errors)
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+        var exception = exceptionHandlerPathFeature?.Error;
+
+        // Ping your phone when the app crashes
+        UniversalMiddleware.API.Helpers.TelegramAlert.Fire(
+            $"🚨 System Crash!\nPath: {context.Request.Method} {context.Request.Path}\nError: {exception?.Message}");
+
+        context.Response.StatusCode = 500;
+        await context.Response.WriteAsJsonAsync(new { Error = "An internal server error occurred." });
+    });
+});
 
 // Configure Nginx reverse proxy headers before any logging or routing
 app.UseForwardedHeaders();
@@ -176,7 +193,7 @@ app.UseSwaggerUI(c =>
     c.RoutePrefix = "docs";
 });
 
-app.UseCors("OmniNodeCorsPolicy");
+app.UseCors("Frontend");      
 app.UseRouting();
 
 app.UseAuthentication();

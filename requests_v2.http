@@ -15,11 +15,11 @@
 @agencyId = 4aacdb17-89fb-4179-8627-dbebc50a5310
 @subTenantId = 6b60f433-1ad6-468a-a96e-69520da4c064
 @merchantTenantId = 47e08fba-d5c1-4c01-a691-2513328a2d3b
-@tenantApiKey = um_live_3SPbLMJvcypd9O5dwDrWOkBf 
+@tenantApiKey = um_live_tEL46upd9LcjIHxnFAcpH6XE 
 @invoiceId = ffb9dd26-8491-4bcb-81b0-02a619bdb0e4
-@sourceEndpointId = 00000000-0000-0000-0000-000000000000
-@destEndpointId = 00000000-0000-0000-0000-000000000000
-@connectionId = 00000000-0000-0000-0000-000000000000
+@sourceEndpointId = 46460ddf-6112-4597-8518-294390074aa3
+@destEndpointId = 7e6de238-eb25-49cc-964b-9575500d8d0c
+@connectionId = e5bb81bd-dd79-4d86-afaf-656d8bd7ec00
 
 
 ### ==========================================================================

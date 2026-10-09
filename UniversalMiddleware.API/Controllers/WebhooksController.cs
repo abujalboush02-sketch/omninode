@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
@@ -71,6 +71,7 @@ public class WebhooksController : ControllerBase
 
                 if (rowsAffected == 0)
                 {
+                    UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"⚠️ Quota Maxed Out!\nTenant: {tenant.Name}\nLimit: {tenant.MonthlyTaskQuota} tasks.\nAction: Call them for an upgrade.");
                     return StatusCode(429, new { Error = "Monthly task quota exceeded. Please upgrade your plan." });
                 }
 
@@ -145,6 +146,7 @@ public class WebhooksController : ControllerBase
 
                 if (rowsAffected == 0)
                 {
+                    UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"⚠️ AI Quota Maxed Out!\nTenant: {tenant.Name}\nLimit: {tenant.MonthlyTaskQuota} tasks.\nAction: Call them for an upgrade.");
                     return StatusCode(429, new { Error = "Monthly AI or task quota exceeded. Please upgrade your plan." });
                 }
 

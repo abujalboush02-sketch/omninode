@@ -177,14 +177,9 @@ public class AgenciesController : ControllerBase
 
     private static string ComputeSha256Hash(string rawData)
     {
-        using var sha256 = System.Security.Cryptography.SHA256.Create();
-        var bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
-        var builder = new System.Text.StringBuilder();
-        foreach (var b in bytes)
-        {
-            builder.Append(b.ToString("x2"));
-        }
-        return builder.ToString();
+        using var sha256 = SHA256.Create();
+        var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawData));
+        return Convert.ToBase64String(bytes);
     }
 
     /// <summary>

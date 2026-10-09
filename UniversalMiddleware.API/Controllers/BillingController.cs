@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -68,6 +68,7 @@ public class BillingController : ControllerBase
         };
 
         _context.PaymentInvoices.Add(invoice);
+        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"💰 Invoice Generated\nAgency: {agency.Name}\nAmount: {invoice.Amount} {invoice.Currency}\nRef: {invoice.ReferenceCode}");
         await _context.SaveChangesAsync();
 
         return Ok(new

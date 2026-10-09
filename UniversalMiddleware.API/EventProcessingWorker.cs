@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -99,6 +99,7 @@ public class EventProcessingWorker : BackgroundService
 
                             if (evt.RetryCount >= evt.MaxRetries)
                             {
+                                UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🛑 Event Failed (DLQ)\nEndpoint ID: {rawEvent.EndpointId}\nReason: {rawEvent.FailureReason}");
                                 evt.Status = "Failed_ManualReviewRequired";
                                 _logger.LogWarning("Event {EventId} reached max retries and requires manual review. Reason: {Reason}", evt.Id, ex.Message);
                             }
