@@ -1,4 +1,5 @@
 ﻿global using UniversalMiddleware.API.Attributes;
+global using UniversalMiddleware.API.Helpers;
 using System;
 using System.Text;
 using System.Threading.Tasks;
@@ -151,6 +152,12 @@ app.UseExceptionHandler(errorApp =>
     {
         var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
         var exception = exceptionHandlerPathFeature?.Error;
+        if (exception is UnauthorizedAccessException)
+        {
+            context.Response.StatusCode = 403;
+            await context.Response.WriteAsJsonAsync(new { Error = exception.Message });
+            return;
+        }
 
         // Ping your phone when the app crashes
         UniversalMiddleware.API.Helpers.TelegramAlert.Fire(

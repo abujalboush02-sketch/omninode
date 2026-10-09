@@ -19,12 +19,9 @@ public class EventsController : ControllerBase
         _context = context;
     }
 
-    private Guid GetAuthenticatedTenantId()
-    {
-        if (HttpContext.Items.TryGetValue("TenantId", out var tenantIdObj) && tenantIdObj is Guid tenantId)
-            return tenantId;
-        throw new UnauthorizedAccessException("Tenant ID is missing from the authenticated context.");
-    }
+    private Guid GetAuthenticatedTenantId() =>
+    HttpContext.GetTenantId()
+    ?? throw new UnauthorizedAccessException("Tenant ID is missing from the authenticated context.");
 
     [HttpGet("logs")]
     public async Task<IActionResult> GetLogs()

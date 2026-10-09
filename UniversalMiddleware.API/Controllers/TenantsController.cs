@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.Domain;
 using UniversalMiddleware.Infrastructure;
+using UniversalMiddleware.API.Helpers;
 
 namespace UniversalMiddleware.API.Controllers;
 
@@ -43,22 +44,18 @@ public class TenantsController : ControllerBase {
     }
 
     [HttpPost("{id}/generate-key")]
-    public async Task<IActionResult> GenerateKey(Guid id) {
+    public async Task<IActionResult> GenerateKey(Guid id)
+    {
+        if (HttpContext.GetTenantId() != id)
+            return StatusCode(403, new { Error = "You can only rotate your own API key." });
+
         var tenant = await _context.Tenants.FindAsync(id);
         if (tenant == null) return NotFound("Tenant not found.");
 
-        // Generate a secure 32-character API key
-        var rawKey = "um_live_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)).Replace("+", "").Replace("/", "").Substring(0, 24);
-
-        // Hash it
-        using (var sha256 = SHA256.Create()) {
-            var hashedBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawKey));
-            tenant.ApiKeyHash = Convert.ToBase64String(hashedBytes);
-        }
-
+        var (raw, hash) = ApiKeys.Generate();
+        tenant.ApiKeyHash = hash;
         await _context.SaveChangesAsync();
 
-        // Return the raw key exactly once. The user must save this, as the system only stores the hash and cannot retrieve the raw key again.
-        return Ok(new { ApiKey = rawKey, Message = "Please save this API key securely. It will not be shown again." });
+        return Ok(new { ApiKey = raw, Message = "Please save this API key securely. It will not be shown again." });
     }
 }

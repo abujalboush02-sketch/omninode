@@ -8,6 +8,8 @@ using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.Domain;
 using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Application;
+using UniversalMiddleware.API.Helpers;
+
 
 namespace UniversalMiddleware.API.Controllers;
 
@@ -33,12 +35,9 @@ public class MappingsController : ControllerBase
         _suggestionService = suggestionService;
     }
 
-    private Guid GetAuthenticatedTenantId()
-    {
-        if (HttpContext.Items.TryGetValue("TenantId", out var tenantIdObj) && tenantIdObj is Guid tenantId)
-            return tenantId;
-        throw new UnauthorizedAccessException("Tenant ID is missing from the authenticated context.");
-    }
+    private Guid GetAuthenticatedTenantId() =>
+    HttpContext.GetTenantId()
+    ?? throw new UnauthorizedAccessException("Tenant ID is missing from the authenticated context.");
 
     [HttpPost("configure")]
     public async Task<IActionResult> ConfigureMapping([FromBody] ConfigureMappingRequest request)

@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.Application.Services;
 using UniversalMiddleware.Domain;
 using UniversalMiddleware.Infrastructure;
+using UniversalMiddleware.API.Helpers;
 
 namespace UniversalMiddleware.API.Controllers;
 
@@ -36,6 +37,10 @@ public class AuthController : ControllerBase
         }
 
         // Create user entity
+        // Never allow self-registration as SuperAdmin
+        if (request.Role == UserRole.SuperAdmin)
+            return BadRequest(new { Error = "Invalid role." });
+
         var user = new User
         {
             Email = emailClean,
@@ -43,9 +48,13 @@ public class AuthController : ControllerBase
             Role = request.Role
         };
 
-        // If self-registering as a Standalone Tenant
+        string? rawApiKey = null;
+
         if (request.Role == UserRole.TenantUser && !request.AgencyId.HasValue)
         {
+            var (raw, hash) = ApiKeys.Generate();
+            rawApiKey = raw;
+
             var tenant = new Tenant
             {
                 Name = request.OrganizationName ?? $"{request.Email}'s Workspace",
@@ -54,13 +63,13 @@ public class AuthController : ControllerBase
                 MonthlyTaskQuota = 150,
                 AiTasksQuota = 0,
                 TenantType = "Standalone",
-                BillingStatus = "Active"
+                BillingStatus = "Active",
+                ApiKeyHash = hash
             };
 
             _context.Tenants.Add(tenant);
             user.Tenant = tenant;
         }
-        // If registering an Agency Owner
         else if (request.Role == UserRole.AgencyOwner)
         {
             var agency = new Agency
@@ -71,7 +80,7 @@ public class AuthController : ControllerBase
                 MaxSubTenants = 5,
                 MonthlyTaskQuota = 25000,
                 MonthlyAiQuota = 1000,
-                BillingStatus = "PendingPayment" // Activated upon CliQ / Wire approval
+                BillingStatus = "PendingPayment"
             };
 
             _context.Agencies.Add(agency);
@@ -79,10 +88,23 @@ public class AuthController : ControllerBase
         }
 
         _context.Users.Add(user);
-        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🚀 New Signup!\nEmail: {request.Email}\nRole: {request.Role}");
         await _context.SaveChangesAsync();
 
+        // Alert only after a successful save
+        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🚀 New Signup!\nEmail: {request.Email}\nRole: {request.Role}");
+
         var token = _tokenService.GenerateToken(user);
+
+        return Ok(new
+        {
+            Token = token,
+            UserId = user.Id,
+            user.Email,
+            Role = user.Role.ToString(),
+            user.AgencyId,
+            user.TenantId,
+            ApiKey = rawApiKey   // shown once; the frontend must store it
+        });
 
         return Ok(new
         {
