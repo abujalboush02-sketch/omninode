@@ -133,9 +133,9 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 // 8. CORS Strategy (Required for Agency Dashboard Frontends)
 builder.Services.AddCors(o => o.AddPolicy("Frontend", p => p
-    .SetIsOriginAllowed(origin =>
-        new Uri(origin).Host == "localhost" ||
-        origin == "https://omni.mohammad-abujalboush.com")
+       .SetIsOriginAllowed(origin =>
+       Uri.TryCreate(origin, UriKind.Absolute, out var u) &&
+       (u.Host == "localhost" || origin == "https://omni.mohammad-abujalboush.com"))
     .AllowAnyHeader()
     .AllowAnyMethod()));
 

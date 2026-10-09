@@ -68,7 +68,7 @@ public class BillingController : ControllerBase
         };
 
         _context.PaymentInvoices.Add(invoice);
-        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"💰 Invoice Generated\nAgency: {agency.Name}\nAmount: {invoice.Amount} {invoice.Currency}\nRef: {invoice.ReferenceCode}");
+        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"💰 Invoice Generated\nAgency: {accountType}: {accountId}\nAmount: {invoice.Amount} {invoice.Currency}\nRef: {invoice.ReferenceCode}");
         await _context.SaveChangesAsync();
 
         return Ok(new

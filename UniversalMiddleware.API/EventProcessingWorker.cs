@@ -43,7 +43,7 @@ public class EventProcessingWorker : BackgroundService
                     using var transaction = await dbContext.Database.BeginTransactionAsync(stoppingToken);
 
                     var pending = await dbContext.RawEvents
-                        .Where(e => e.Status == "Pending" &&
+                    .Where(e => e.Status == "Pending" &&
                                     (!e.LastAttemptAt.HasValue || e.LastAttemptAt.Value.AddMinutes(e.RetryCount * 5) <= DateTime.UtcNow))
                         .OrderBy(e => e.ReceivedAt) // Process oldest first (FIFO)
                         .Take(50) // Increased batch size for enterprise throughput
@@ -99,8 +99,7 @@ public class EventProcessingWorker : BackgroundService
 
                             if (evt.RetryCount >= evt.MaxRetries)
                             {
-                                UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🛑 Event Failed (DLQ)\nEndpoint ID: {rawEvent.EndpointId}\nReason: {rawEvent.FailureReason}");
-                                evt.Status = "Failed_ManualReviewRequired";
+                                UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🛑 Event Failed (DLQ)\nEndpoint ID: {evt.EndpointId}\nReason: {evt.FailureReason}"); evt.Status = "Failed_ManualReviewRequired";
                                 _logger.LogWarning("Event {EventId} reached max retries and requires manual review. Reason: {Reason}", evt.Id, ex.Message);
                             }
                             else
