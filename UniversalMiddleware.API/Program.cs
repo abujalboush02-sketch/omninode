@@ -1,4 +1,4 @@
-﻿global using UniversalMiddleware.API.Attributes;
+global using UniversalMiddleware.API.Attributes;
 global using UniversalMiddleware.API.Helpers;
 using System;
 using System.Text;
@@ -17,6 +17,7 @@ using UniversalMiddleware.Infrastructure;
 using UniversalMiddleware.Application;
 using UniversalMiddleware.Application.Services;
 using UniversalMiddleware.API;
+using UniversalMiddleware.API.Services;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -92,12 +93,17 @@ builder.Services.AddScoped<SchemaBuilderService>();
 builder.Services.AddScoped<MappingValidationService>();
 builder.Services.AddScoped<MappingSuggestionService>();
 builder.Services.AddHttpClient("OutboundCrmClient");
+builder.Services.AddScoped<WebhookIngestService>();
+builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
 
 builder.Services.AddHostedService<EventProcessingWorker>();
 builder.Services.AddHostedService<BillingLifecycleWorker>();
 
 // JWT Authentication Setup
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "OmniNode_Fallback_Super_Secret_Jwt_Encryption_Key_2026";
+// No fallback: a key in source code lets anyone forge tokens (including SuperAdmin).
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
+    throw new InvalidOperationException("Jwt:Key must be set (env var Jwt__Key) and be at least 32 characters.");
 var keyBytes = Encoding.UTF8.GetBytes(jwtKey);
 
 builder.Services.AddAuthentication(options =>
@@ -134,9 +140,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 // 8. CORS Strategy (Required for Agency Dashboard Frontends)
 builder.Services.AddCors(o => o.AddPolicy("Frontend", p => p
-       .SetIsOriginAllowed(origin =>
-       Uri.TryCreate(origin, UriKind.Absolute, out var u) &&
-       (u.Host == "localhost" || origin == "https://omni.mohammad-abujalboush.com"))
+    .SetIsOriginAllowed(origin =>
+        Uri.TryCreate(origin, UriKind.Absolute, out var u) &&
+        (u.Host == "localhost" || u.Host == "127.0.0.1" ||
+         origin == "https://omni.mohammad-abujalboush.com"))
     .AllowAnyHeader()
     .AllowAnyMethod()));
 
@@ -152,6 +159,8 @@ app.UseExceptionHandler(errorApp =>
     {
         var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
         var exception = exceptionHandlerPathFeature?.Error;
+
+        // Auth/ownership problems are client errors, not crashes: 403, no Telegram alert.
         if (exception is UnauthorizedAccessException)
         {
             context.Response.StatusCode = 403;
@@ -200,8 +209,8 @@ app.UseSwaggerUI(c =>
     c.RoutePrefix = "docs";
 });
 
-app.UseCors("Frontend");      
 app.UseRouting();
+app.UseCors("Frontend");
 
 app.UseAuthentication();
 app.UseAuthorization();

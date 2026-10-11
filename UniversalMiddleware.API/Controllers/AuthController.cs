@@ -1,13 +1,17 @@
-﻿using System;
+using System;
+using System.Linq;
+using System.Net;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using UniversalMiddleware.API.Helpers;
+using UniversalMiddleware.API.Services;
 using UniversalMiddleware.Application.Services;
 using UniversalMiddleware.Domain;
 using UniversalMiddleware.Infrastructure;
-using UniversalMiddleware.API.Helpers;
 
 namespace UniversalMiddleware.API.Controllers;
 
@@ -15,31 +19,43 @@ namespace UniversalMiddleware.API.Controllers;
 [Route("api/[controller]")]
 public class AuthController : ControllerBase
 {
+    private const int MinPasswordLength = 8;
+
     private readonly AppDbContext _context;
     private readonly IPasswordHasher _hasher;
     private readonly ITokenService _tokenService;
+    private readonly IEmailSender _email;
+    private readonly IConfiguration _config;
 
-    public AuthController(AppDbContext context, IPasswordHasher hasher, ITokenService tokenService)
+    public AuthController(AppDbContext context, IPasswordHasher hasher, ITokenService tokenService,
+        IEmailSender email, IConfiguration config)
     {
         _context = context;
         _hasher = hasher;
         _tokenService = tokenService;
+        _email = email;
+        _config = config;
     }
 
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        var emailClean = request.Email.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@'))
+            return BadRequest(new { Error = "A valid email is required." });
+        if (string.IsNullOrEmpty(request.Password) || request.Password.Length < MinPasswordLength)
+            return BadRequest(new { Error = $"Password must be at least {MinPasswordLength} characters." });
 
-        if (await _context.Users.AnyAsync(u => u.Email == emailClean))
-        {
-            return BadRequest(new { Error = "An account with this email already exists." });
-        }
-
-        // Create user entity
-        // Never allow self-registration as SuperAdmin
-        if (request.Role == UserRole.SuperAdmin)
+        // Only tenant or agency-owner self-signup. Never SuperAdmin, never unknown enum values.
+        if (request.Role != UserRole.TenantUser && request.Role != UserRole.AgencyOwner)
             return BadRequest(new { Error = "Invalid role." });
+
+        // Agency members are provisioned by their agency, not by claiming an AgencyId at signup.
+        if (request.AgencyId.HasValue)
+            return BadRequest(new { Error = "Agency members are invited by their agency." });
+
+        var emailClean = request.Email.Trim().ToLowerInvariant();
+        if (await _context.Users.AnyAsync(u => u.Email == emailClean))
+            return BadRequest(new { Error = "An account with this email already exists." });
 
         var user = new User
         {
@@ -50,39 +66,38 @@ public class AuthController : ControllerBase
 
         string? rawApiKey = null;
 
-        if (request.Role == UserRole.TenantUser && !request.AgencyId.HasValue)
+        if (request.Role == UserRole.TenantUser)
         {
             var (raw, hash) = ApiKeys.Generate();
             rawApiKey = raw;
 
+            var free = Plans.Find("free")!;
             var tenant = new Tenant
             {
-                Name = request.OrganizationName ?? $"{request.Email}'s Workspace",
-                OwnerName = request.OrganizationName ?? emailClean,   
-                PlanType = "Standalone",                              
+                Name = string.IsNullOrWhiteSpace(request.OrganizationName) ? $"{emailClean}'s Workspace" : request.OrganizationName.Trim(),
+                OwnerName = string.IsNullOrWhiteSpace(request.OrganizationName) ? emailClean : request.OrganizationName.Trim(),
                 OwnerEmail = emailClean,
-                SubscriptionTier = "Starter",
-                MonthlyTaskQuota = 150,
-                AiTasksQuota = 0,
+                PlanType = "Standalone",
                 TenantType = "Standalone",
                 BillingStatus = "Active",
                 ApiKeyHash = hash
             };
+            Plans.Apply(tenant, free); // Free: 150 tasks, 0 AI
 
             _context.Tenants.Add(tenant);
             user.Tenant = tenant;
         }
-        else if (request.Role == UserRole.AgencyOwner)
+        else
         {
             var agency = new Agency
             {
-                Name = request.OrganizationName ?? $"{request.Email} Agency",
+                Name = string.IsNullOrWhiteSpace(request.OrganizationName) ? $"{emailClean} Agency" : request.OrganizationName.Trim(),
                 OwnerEmail = emailClean,
                 SubscriptionTier = "Agency Bronze",
                 MaxSubTenants = 5,
                 MonthlyTaskQuota = 25000,
                 MonthlyAiQuota = 1000,
-                BillingStatus = "PendingPayment"
+                BillingStatus = "PendingPayment" // Activated upon CliQ / Wire approval
             };
 
             _context.Agencies.Add(agency);
@@ -92,51 +107,42 @@ public class AuthController : ControllerBase
         _context.Users.Add(user);
         await _context.SaveChangesAsync();
 
-        // Alert only after a successful save
-        UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🚀 New Signup!\nEmail: {request.Email}\nRole: {request.Role}");
-
-        var token = _tokenService.GenerateToken(user);
+        TelegramAlert.Fire($"🚀 New Signup!\nEmail: {emailClean}\nRole: {request.Role}");
 
         return Ok(new
         {
-            Token = token,
+            Token = _tokenService.GenerateToken(user),
             UserId = user.Id,
             user.Email,
             Role = user.Role.ToString(),
             user.AgencyId,
             user.TenantId,
-            ApiKey = rawApiKey   // shown once; the frontend must store it
+            ApiKey = rawApiKey // shown once; the frontend must store it
         });
     }
 
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        var emailClean = request.Email.Trim().ToLowerInvariant();
+        var emailClean = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
 
         var user = await _context.Users
             .Include(u => u.Agency)
             .Include(u => u.Tenant)
             .FirstOrDefaultAsync(u => u.Email == emailClean);
 
-        if (user == null || !_hasher.VerifyPassword(request.Password, user.PasswordHash))
-        {
+        if (user == null || !_hasher.VerifyPassword(request.Password ?? string.Empty, user.PasswordHash))
             return Unauthorized(new { Error = "Invalid credentials." });
-        }
 
         if (!user.IsActive)
-        {
             return StatusCode(403, new { Error = "Account has been deactivated. Please contact support." });
-        }
 
         user.LastLoginAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
-        var token = _tokenService.GenerateToken(user);
-
         return Ok(new
         {
-            Token = token,
+            Token = _tokenService.GenerateToken(user),
             UserId = user.Id,
             user.Email,
             Role = user.Role.ToString(),
@@ -149,11 +155,8 @@ public class AuthController : ControllerBase
     [HttpGet("me")]
     public async Task<IActionResult> GetProfile()
     {
-        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
-        {
+        if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
             return Unauthorized();
-        }
 
         var user = await _context.Users
             .AsNoTracking()
@@ -161,8 +164,7 @@ public class AuthController : ControllerBase
             .Include(u => u.Tenant)
             .FirstOrDefaultAsync(u => u.Id == userId);
 
-        if (user == null)
-            return NotFound();
+        if (user == null) return NotFound();
 
         return Ok(new
         {
@@ -177,14 +179,94 @@ public class AuthController : ControllerBase
             user.LastLoginAt
         });
     }
+
+    [Authorize]
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+            return Unauthorized();
+
+        if (string.IsNullOrEmpty(request.NewPassword) || request.NewPassword.Length < MinPasswordLength)
+            return BadRequest(new { Error = $"New password must be at least {MinPasswordLength} characters." });
+
+        var user = await _context.Users.FindAsync(userId);
+        if (user == null) return Unauthorized();
+
+        if (!_hasher.VerifyPassword(request.CurrentPassword ?? string.Empty, user.PasswordHash))
+            return BadRequest(new { Error = "Current password is incorrect." });
+
+        user.PasswordHash = _hasher.HashPassword(request.NewPassword);
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+
+    /// <summary>Always 202, so it never reveals whether an email is registered.</summary>
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    {
+        var emailClean = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == emailClean && u.IsActive);
+
+        if (user != null)
+        {
+            // Invalidate older unused tokens for this user
+            var now = DateTime.UtcNow;
+            var old = await _context.PasswordResetTokens
+                .Where(t => t.UserId == user.Id && t.UsedAt == null && t.ExpiresAt > now)
+                .ToListAsync();
+            foreach (var t in old) t.UsedAt = now;
+
+            var rawToken = ApiKeys.RandomUrlSafe("rst_", 32);
+            _context.PasswordResetTokens.Add(new PasswordResetToken
+            {
+                UserId = user.Id,
+                TokenHash = ApiKeys.Hash(rawToken),
+                ExpiresAt = now.AddHours(1)
+            });
+            await _context.SaveChangesAsync();
+
+            var frontend = (_config["App:FrontendUrl"] ?? "https://omni.mohammad-abujalboush.com").TrimEnd('/');
+            var link = $"{frontend}/#/reset-password?token={WebUtility.UrlEncode(rawToken)}";
+
+            await _email.SendAsync(user.Email, "Reset your OmniNode password",
+                $"<p>Someone asked to reset the password for your OmniNode account.</p>" +
+                $"<p><a href=\"{link}\">Reset your password</a> (valid for 1 hour).</p>" +
+                $"<p>If this wasn't you, ignore this email.</p>");
+        }
+
+        return Accepted();
+    }
+
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        if (string.IsNullOrEmpty(request.NewPassword) || request.NewPassword.Length < MinPasswordLength)
+            return BadRequest(new { Error = $"New password must be at least {MinPasswordLength} characters." });
+        if (string.IsNullOrWhiteSpace(request.Token))
+            return BadRequest(new { Error = "This reset link is invalid or has expired." });
+
+        var hash = ApiKeys.Hash(request.Token.Trim());
+        var now = DateTime.UtcNow;
+
+        var token = await _context.PasswordResetTokens
+            .FirstOrDefaultAsync(t => t.TokenHash == hash && t.UsedAt == null && t.ExpiresAt > now);
+        if (token == null)
+            return BadRequest(new { Error = "This reset link is invalid or has expired." });
+
+        var user = await _context.Users.FindAsync(token.UserId);
+        if (user == null || !user.IsActive)
+            return BadRequest(new { Error = "This reset link is invalid or has expired." });
+
+        user.PasswordHash = _hasher.HashPassword(request.NewPassword);
+        token.UsedAt = now;
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
 }
 
-public record RegisterRequest(
-    string Email,
-    string Password,
-    UserRole Role,
-    string? OrganizationName,
-    Guid? AgencyId
-);
-
+public record RegisterRequest(string Email, string Password, UserRole Role, string? OrganizationName, Guid? AgencyId);
 public record LoginRequest(string Email, string Password);
+public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record ForgotPasswordRequest(string Email);
+public record ResetPasswordRequest(string Token, string NewPassword);

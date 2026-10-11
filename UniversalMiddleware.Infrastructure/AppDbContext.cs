@@ -21,6 +21,8 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<PaymentInvoice> PaymentInvoices => Set<PaymentInvoice>();
     public DbSet<UsageLedger> UsageLedgers => Set<UsageLedger>();
+    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
 
     // 1. Registered Missing DbSet for EventProcessor Dependency
     public DbSet<FieldMappingRule> FieldMappingRules { get; set; }
@@ -81,6 +83,25 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<User>()
             .HasIndex(u => u.Email)
             .IsUnique();
+
+        // Secret inbound webhook path must be unique (NULLs allowed for destination endpoints)
+        modelBuilder.Entity<Endpoint>()
+            .HasIndex(e => e.WebhookSecret)
+            .IsUnique();
+
+        modelBuilder.Entity<Connection>()
+            .HasIndex(c => c.DestinationEndpointId);
+
+        modelBuilder.Entity<PasswordResetToken>()
+            .HasIndex(t => t.TokenHash)
+            .IsUnique();
+
+        modelBuilder.Entity<DeviceToken>()
+            .HasIndex(d => d.Token)
+            .IsUnique();
+
+        modelBuilder.Entity<DeviceToken>()
+            .HasIndex(d => d.UserId);
 
         // Invoice reference uniqueness for easy reconciliation
         modelBuilder.Entity<PaymentInvoice>()

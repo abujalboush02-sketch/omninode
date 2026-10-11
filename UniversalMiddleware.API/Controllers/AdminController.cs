@@ -141,7 +141,7 @@ public class AdminController : ControllerBase
             .SetProperty(e => e.Status, "Pending")
             .SetProperty(e => e.RetryCount, 0)
             .SetProperty(e => e.LastAttemptAt, (DateTime?)null)
-            .SetProperty(e => e.FailureReason, (string?)null));
+            .SetProperty(e => e.FailureReason, string.Empty)); // column is NOT NULL
 
         return Ok(new
         {

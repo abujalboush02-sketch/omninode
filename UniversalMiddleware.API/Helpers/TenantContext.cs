@@ -24,7 +24,12 @@ public static class ApiKeys
         return (raw, Hash(raw));
     }
 
-    // Same algorithm TenantsController uses: SHA256 -> Base64 of UTF8 bytes
+    // Same algorithm ApiKeyAuthAttribute uses: SHA256 -> Base64 of UTF8 bytes
     public static string Hash(string raw) =>
         Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
+
+    /// <summary>URL-safe random secret, e.g. for webhook paths and reset tokens.</summary>
+    public static string RandomUrlSafe(string prefix, int bytes = 24) =>
+        prefix + Convert.ToBase64String(RandomNumberGenerator.GetBytes(bytes))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
 }

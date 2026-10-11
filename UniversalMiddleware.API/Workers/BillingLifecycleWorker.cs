@@ -95,12 +95,21 @@ public class BillingLifecycleWorker : BackgroundService
         var now = DateTime.UtcNow;
 
         // 1. Process Expired Tenants
+        // Agency sub-tenants follow their agency's billing; only standalone tenants are checked here.
         var expiredTenants = await dbContext.Tenants
-            .Where(t => t.NextRenewalDate < now && t.BillingStatus != "Suspended")
+            .Where(t => t.NextRenewalDate < now && t.BillingStatus != "Suspended" && t.AgencyId == null)
             .ToListAsync(ct);
 
         foreach (var tenant in expiredTenants)
         {
+            // Free tier never expires: roll its renewal date forward instead of suspending it.
+            if (UniversalMiddleware.API.Helpers.Plans.IsFree(tenant))
+            {
+                tenant.NextRenewalDate = now.AddDays(30);
+                tenant.BillingStatus = "Active";
+                continue;
+            }
+
             var daysOverdue = (now - tenant.NextRenewalDate).TotalDays;
 
             if (daysOverdue > 3)

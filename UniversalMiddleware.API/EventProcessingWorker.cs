@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +15,7 @@ public class EventProcessingWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<EventProcessingWorker> _logger;
+    private DateTime _lastStuckSweep = DateTime.MinValue;
 
     public EventProcessingWorker(IServiceProvider serviceProvider, ILogger<EventProcessingWorker> logger)
     {
@@ -35,6 +36,18 @@ public class EventProcessingWorker : BackgroundService
                 using var scope = _serviceProvider.CreateScope();
                 var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+                // 0. Recover events stuck in "Processing" (container restart or failed save mid-batch)
+                if (DateTime.UtcNow - _lastStuckSweep > TimeSpan.FromMinutes(1))
+                {
+                    _lastStuckSweep = DateTime.UtcNow;
+                    var stuckBefore = DateTime.UtcNow.AddMinutes(-10);
+                    var recovered = await dbContext.RawEvents
+                        .Where(e => e.Status == "Processing" && (e.LastAttemptAt == null || e.LastAttemptAt < stuckBefore) && e.ReceivedAt < stuckBefore)
+                        .ExecuteUpdateAsync(s => s.SetProperty(e => e.Status, "Pending"), stoppingToken);
+                    if (recovered > 0)
+                        _logger.LogWarning("Recovered {Count} event(s) stuck in Processing.", recovered);
+                }
+
                 // 1. Transactional Claim Pattern (Prevents duplicate processing across scaled containers)
                 var strategy = dbContext.Database.CreateExecutionStrategy();
 
@@ -43,7 +56,7 @@ public class EventProcessingWorker : BackgroundService
                     using var transaction = await dbContext.Database.BeginTransactionAsync(stoppingToken);
 
                     var pending = await dbContext.RawEvents
-                    .Where(e => e.Status == "Pending" &&
+                        .Where(e => e.Status == "Pending" &&
                                     (!e.LastAttemptAt.HasValue || e.LastAttemptAt.Value.AddMinutes(e.RetryCount * 5) <= DateTime.UtcNow))
                         .OrderBy(e => e.ReceivedAt) // Process oldest first (FIFO)
                         .Take(50) // Increased batch size for enterprise throughput
@@ -54,6 +67,7 @@ public class EventProcessingWorker : BackgroundService
                         foreach (var evt in pending)
                         {
                             evt.Status = "Processing"; // Lock the row
+                            evt.LastAttemptAt = DateTime.UtcNow;
                         }
                         await dbContext.SaveChangesAsync(stoppingToken);
                     }
@@ -89,7 +103,7 @@ public class EventProcessingWorker : BackgroundService
                             await eventProcessor.ProcessAsync(evt);
 
                             evt.Status = "Processed";
-                            evt.FailureReason = null;
+                            evt.FailureReason = string.Empty; // column is NOT NULL
                         }
                         catch (Exception ex)
                         {
@@ -99,7 +113,8 @@ public class EventProcessingWorker : BackgroundService
 
                             if (evt.RetryCount >= evt.MaxRetries)
                             {
-                                UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🛑 Event Failed (DLQ)\nEndpoint ID: {evt.EndpointId}\nReason: {evt.FailureReason}"); evt.Status = "Failed_ManualReviewRequired";
+                                UniversalMiddleware.API.Helpers.TelegramAlert.Fire($"🛑 Event Failed (DLQ)\nEndpoint ID: {evt.EndpointId}\nReason: {evt.FailureReason}");
+                                evt.Status = "Failed_ManualReviewRequired";
                                 _logger.LogWarning("Event {EventId} reached max retries and requires manual review. Reason: {Reason}", evt.Id, ex.Message);
                             }
                             else

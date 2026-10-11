@@ -87,6 +87,13 @@ public class Endpoint
     public string WebhookUrl { get; set; } = string.Empty;
     public string AuthHeaders { get; set; } = string.Empty;
 
+    // Source endpoints: secret path segment for header-less senders (Shopify etc.)
+    // POST /api/Webhooks/s/{WebhookSecret}
+    public string? WebhookSecret { get; set; }
+
+    // Optional: platform signing secret (e.g. Shopify) used to verify X-Shopify-Hmac-Sha256
+    public string? SigningSecret { get; set; }
+
     public virtual Tenant? Tenant { get; set; }
     public virtual Connection? Connection { get; set; }
 }
@@ -97,7 +104,9 @@ public class Connection
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid SourceEndpointId { get; set; }
     public Guid DestinationEndpointId { get; set; }
-    public string Status { get; set; } = "Created";
+    public string Status { get; set; } = "MappingRequired"; // MappingRequired, Active
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public string BaseUrl { get; set; } = string.Empty;
     public string ApiKey { get; set; } = string.Empty;
@@ -129,6 +138,8 @@ public class Mapping
 
     [Column(TypeName = "jsonb")]
     public string FieldMappings { get; set; } = string.Empty;
+
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class RawEvent
@@ -236,6 +247,7 @@ public class PaymentInvoice
     public string PaymentMethod { get; set; } = "CliQ"; // CliQ, BankWire, Cash
     public string ReferenceCode { get; set; } = string.Empty; // e.g. "INV-2026-X" for matching CliQ/Wire memo
     public string Status { get; set; } = "Unpaid"; // Unpaid, Confirmed, Rejected
+    public string? PlanId { get; set; } // free|bronze|silver|gold|platinum (tenant invoices)
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
     public Guid? ConfirmedByAdminId { get; set; }
@@ -253,6 +265,26 @@ public class UsageLedger
     public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
 }
 
+
+public class PasswordResetToken
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public string TokenHash { get; set; } = string.Empty; // SHA256 of the raw token; raw token is only emailed
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? UsedAt { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class DeviceToken
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public string Token { get; set; } = string.Empty; // FCM registration token
+    public string Platform { get; set; } = string.Empty; // android, ios, web
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
+}
 
 public enum UserRole
 {

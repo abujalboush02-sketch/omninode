@@ -91,6 +91,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("DestinationEndpointId")
                         .HasColumnType("uuid");
 
@@ -102,6 +105,8 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DestinationEndpointId");
 
                     b.HasIndex("SourceEndpointId")
                         .IsUnique();
@@ -131,6 +136,39 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                     b.ToTable("ConversationSessions");
                 });
 
+            modelBuilder.Entity("UniversalMiddleware.Domain.DeviceToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Token")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("DeviceTokens");
+                });
+
             modelBuilder.Entity("UniversalMiddleware.Domain.Endpoint", b =>
                 {
                     b.Property<Guid>("Id")
@@ -149,14 +187,23 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("SigningSecret")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("WebhookSecret")
+                        .HasColumnType("text");
 
                     b.Property<string>("WebhookUrl")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("WebhookSecret")
+                        .IsUnique();
 
                     b.HasIndex("TenantId", "Id");
 
@@ -244,6 +291,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("jsonb");
 
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
 
                     b.ToTable("Mappings");
@@ -283,6 +333,36 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                     b.ToTable("OrderDrafts");
                 });
 
+            modelBuilder.Entity("UniversalMiddleware.Domain.PasswordResetToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("PasswordResetTokens");
+                });
+
             modelBuilder.Entity("UniversalMiddleware.Domain.PaymentInvoice", b =>
                 {
                     b.Property<Guid>("Id")
@@ -314,6 +394,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
 
                     b.Property<string>("PaymentMethod")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PlanId")
                         .HasColumnType("text");
 
                     b.Property<string>("ReferenceCode")
