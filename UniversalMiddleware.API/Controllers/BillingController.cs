@@ -73,7 +73,8 @@ public class BillingController : ControllerBase
             i.PaymentMethod,
             Status = i.Status switch { "Confirmed" => "Approved", "Rejected" => "Rejected", _ => "Pending" },
             i.CreatedAt,
-            ApprovedAt = i.PaidAt
+            ApprovedAt = i.PaidAt,
+            Instructions = GetPaymentInstructions(i.PaymentMethod.ToLowerInvariant(), i.ReferenceCode)
         }));
     }
 
