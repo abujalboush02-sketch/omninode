@@ -35,6 +35,15 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("BrandColor")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BrandLogoDataUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BrandName")
+                        .HasColumnType("text");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -58,12 +67,18 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("ReportFooter")
+                        .HasColumnType("text");
+
                     b.Property<string>("SubscriptionTier")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<int>("TasksUsedThisMonth")
                         .HasColumnType("integer");
+
+                    b.Property<bool>("WhiteLabel")
+                        .HasColumnType("boolean");
 
                     b.HasKey("Id");
 
@@ -406,6 +421,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("WhiteLabelAddOn")
+                        .HasColumnType("boolean");
 
                     b.HasKey("Id");
 

@@ -96,6 +96,27 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
+    /// Custom limits for an agency (e.g. a negotiated Platinum deal). Fields left null are unchanged.
+    /// </summary>
+    [HttpPut("agencies/{agencyId:guid}/limits")]
+    public async Task<IActionResult> SetAgencyLimits(Guid agencyId, [FromBody] AgencyLimitsRequest request)
+    {
+        var agency = await _context.Agencies.FindAsync(agencyId);
+        if (agency == null) return NotFound(new { Error = "Agency not found." });
+
+        if (request.MonthlyTaskQuota is < 0 || request.MonthlyAiQuota is < 0 || request.MaxSubTenants is < 0)
+            return BadRequest(new { Error = "Limits can't be negative." });
+
+        if (request.MonthlyTaskQuota.HasValue) agency.MonthlyTaskQuota = request.MonthlyTaskQuota.Value;
+        if (request.MonthlyAiQuota.HasValue) agency.MonthlyAiQuota = request.MonthlyAiQuota.Value;
+        if (request.MaxSubTenants.HasValue) agency.MaxSubTenants = request.MaxSubTenants.Value;
+        if (request.WhiteLabel.HasValue) agency.WhiteLabel = request.WhiteLabel.Value;
+
+        await _context.SaveChangesAsync();
+        return Ok(new { agency.Id, agency.Name, agency.MonthlyTaskQuota, agency.MonthlyAiQuota, agency.MaxSubTenants, agency.WhiteLabel });
+    }
+
+    /// <summary>
     /// Returns the Dead-Letter Queue (all events requiring manual intervention).
     /// </summary>
     [HttpGet("dead-letter-queue")]
@@ -149,3 +170,5 @@ public class AdminController : ControllerBase
         });
     }
 }
+
+public record AgencyLimitsRequest(int? MonthlyTaskQuota, int? MonthlyAiQuota, int? MaxSubTenants, bool? WhiteLabel);

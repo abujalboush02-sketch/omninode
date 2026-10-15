@@ -11,10 +11,13 @@ namespace UniversalMiddleware.API.Services;
 
 /// <summary>
 /// Single place that meters quota and queues a RawEvent.
-/// Used by WebhooksController (API key / JWT) and PublicWebhooksController (secret URL).
+/// Standalone tenant: tenant quota only. Agency client: client allocation AND the agency pool (both with 110% grace).
 /// </summary>
 public class WebhookIngestService
 {
+    private static readonly string[] InactiveTenant = { "Suspended", "Paused" };
+    private static readonly string[] InactiveAgency = { "Suspended", "PendingPayment" };
+
     private readonly AppDbContext _db;
 
     public WebhookIngestService(AppDbContext db)
@@ -35,14 +38,29 @@ public class WebhookIngestService
                 if (tenant == null)
                     return new NotFoundObjectResult(new { Error = "Tenant record not found." });
 
-                if (tenant.BillingStatus == "Suspended")
-                    return Error(402, "Tenant account is suspended due to unpaid invoices. Webhook processing is paused.", tenant);
+                if (InactiveTenant.Contains(tenant.BillingStatus))
+                    return Error(402, tenant.BillingStatus == "Paused"
+                        ? "This workspace is paused by its agency. Webhook processing is paused."
+                        : "Tenant account is suspended due to unpaid invoices. Webhook processing is paused.", tenant, null);
 
-                // Atomic quota increment with a 110% grace buffer (integer math so EF can translate it)
-                int rowsAffected;
+                Agency? agency = null;
+                if (tenant.AgencyId is Guid agencyId)
+                {
+                    agency = await _db.Agencies.AsNoTracking().FirstOrDefaultAsync(a => a.Id == agencyId);
+                    if (agency == null)
+                        return new NotFoundObjectResult(new { Error = "Agency record not found." });
+
+                    if (InactiveAgency.Contains(agency.BillingStatus))
+                        return Error(402, agency.BillingStatus == "PendingPayment"
+                            ? "The agency plan isn't active yet. Webhooks start once the first payment is confirmed."
+                            : "The agency account is suspended due to unpaid invoices. Webhook processing is paused.", tenant, agency);
+                }
+
+                // 1. Client / standalone tenant quota (atomic, 110% grace)
+                int rows;
                 if (isAi)
                 {
-                    rowsAffected = await _db.Tenants
+                    rows = await _db.Tenants
                         .Where(t => t.Id == tenantId &&
                                     t.TasksUsedThisMonth * Plans.GraceDenominator < t.MonthlyTaskQuota * Plans.GraceNumerator &&
                                     t.AiTasksUsedThisMonth * Plans.GraceDenominator < t.AiTasksQuota * Plans.GraceNumerator)
@@ -52,25 +70,59 @@ public class WebhookIngestService
                 }
                 else
                 {
-                    rowsAffected = await _db.Tenants
+                    rows = await _db.Tenants
                         .Where(t => t.Id == tenantId &&
                                     t.TasksUsedThisMonth * Plans.GraceDenominator < t.MonthlyTaskQuota * Plans.GraceNumerator)
-                        .ExecuteUpdateAsync(s => s
-                            .SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1));
+                        .ExecuteUpdateAsync(s => s.SetProperty(t => t.TasksUsedThisMonth, t => t.TasksUsedThisMonth + 1));
                 }
 
-                if (rowsAffected == 0)
+                if (rows == 0)
                 {
                     await transaction.RollbackAsync();
-                    return Error(429, isAi
-                        ? "Monthly AI or task quota exceeded. Please upgrade your plan."
-                        : "Monthly task quota exceeded. Please upgrade your plan.", tenant);
+                    return Error(429, agency != null
+                        ? "This client's monthly allocation is used up. The agency can raise it from its portal."
+                        : isAi ? "Monthly AI or task quota exceeded. Please upgrade your plan."
+                               : "Monthly task quota exceeded. Please upgrade your plan.", tenant, agency);
                 }
 
-                // Alert once, on the exact request that reaches 100% (not on every rejected webhook)
+                // 2. Agency pool (atomic, 110% grace). Rolls back the client increment if the pool is empty.
+                if (agency != null)
+                {
+                    int poolRows;
+                    if (isAi)
+                    {
+                        poolRows = await _db.Agencies
+                            .Where(a => a.Id == agency.Id &&
+                                        a.TasksUsedThisMonth * Plans.GraceDenominator < a.MonthlyTaskQuota * Plans.GraceNumerator &&
+                                        a.AiTasksUsedThisMonth * Plans.GraceDenominator < a.MonthlyAiQuota * Plans.GraceNumerator)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(a => a.TasksUsedThisMonth, a => a.TasksUsedThisMonth + 1)
+                                .SetProperty(a => a.AiTasksUsedThisMonth, a => a.AiTasksUsedThisMonth + 1));
+                    }
+                    else
+                    {
+                        poolRows = await _db.Agencies
+                            .Where(a => a.Id == agency.Id &&
+                                        a.TasksUsedThisMonth * Plans.GraceDenominator < a.MonthlyTaskQuota * Plans.GraceNumerator)
+                            .ExecuteUpdateAsync(s => s.SetProperty(a => a.TasksUsedThisMonth, a => a.TasksUsedThisMonth + 1));
+                    }
+
+                    if (poolRows == 0)
+                    {
+                        await transaction.RollbackAsync();
+                        return Error(429, "The agency's monthly task pool is used up. The agency needs to upgrade its plan.", tenant, agency);
+                    }
+
+                    if (agency.TasksUsedThisMonth + 1 == agency.MonthlyTaskQuota)
+                        TelegramAlert.Fire($"⚠️ Agency pool reached (100%)\nAgency: {agency.Name}\nPlan: {agency.SubscriptionTier}\nLimit: {agency.MonthlyTaskQuota} tasks (grace to 110%).");
+                }
+
+                // Alert once, on the exact request that reaches 100% of the client's own quota
                 if (tenant.TasksUsedThisMonth + 1 == tenant.MonthlyTaskQuota)
                 {
-                    TelegramAlert.Fire($"⚠️ Quota reached (100%)\nTenant: {tenant.Name}\nPlan: {tenant.SubscriptionTier}\nLimit: {tenant.MonthlyTaskQuota} tasks (grace to 110%).\nAction: Call them for an upgrade.");
+                    TelegramAlert.Fire(agency != null
+                        ? $"ℹ️ Client allocation reached (100%)\nAgency: {agency.Name}\nClient: {tenant.Name}\nAllocation: {tenant.MonthlyTaskQuota}"
+                        : $"⚠️ Quota reached (100%)\nTenant: {tenant.Name}\nPlan: {tenant.SubscriptionTier}\nLimit: {tenant.MonthlyTaskQuota} tasks (grace to 110%).\nAction: Call them for an upgrade.");
                 }
 
                 _db.RawEvents.Add(new RawEvent
@@ -102,7 +154,7 @@ public class WebhookIngestService
         });
     }
 
-    private static ObjectResult Error(int status, string message, Tenant tenant) =>
+    private static ObjectResult Error(int status, string message, Tenant tenant, Agency? agency) =>
         new(new
         {
             Error = message,
@@ -110,7 +162,10 @@ public class WebhookIngestService
             tenant.TasksUsedThisMonth,
             tenant.MonthlyTaskQuota,
             tenant.AiTasksUsedThisMonth,
-            tenant.AiTasksQuota
+            tenant.AiTasksQuota,
+            AgencyBillingStatus = agency?.BillingStatus,
+            AgencyTasksUsedThisMonth = agency?.TasksUsedThisMonth,
+            AgencyMonthlyTaskQuota = agency?.MonthlyTaskQuota
         })
         { StatusCode = status };
 }

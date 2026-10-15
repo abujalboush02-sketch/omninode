@@ -18,6 +18,8 @@ namespace UniversalMiddleware.API.Attributes;
 public class ApiKeyAuthAttribute : Attribute, IAsyncActionFilter
 {
     private const string ApiKeyHeaderName = "X-Api-Key";
+    private const string ApiKeyQueryName = "key";
+    private const string ActAsHeaderName = "X-Tenant-Id";
     private readonly UserRole[] _allowedRoles;
 
     public ApiKeyAuthAttribute(params UserRole[] allowedRoles)
@@ -62,19 +64,53 @@ public class ApiKeyAuthAttribute : Attribute, IAsyncActionFilter
                     httpContext.Items["AgencyId"] = agencyId;
                 }
 
+                // "Act as client": agency owners (their own clients only) and SuperAdmin (any tenant)
+                // send X-Tenant-Id to work inside a client's workspace with the normal tenant endpoints.
+                if (httpContext.Request.Headers.TryGetValue(ActAsHeaderName, out var actAsRaw) &&
+                    !string.IsNullOrWhiteSpace(actAsRaw))
+                {
+                    if (!Guid.TryParse(actAsRaw.ToString().Trim(), out var targetTenantId))
+                    {
+                        context.Result = new BadRequestObjectResult(new { Error = "X-Tenant-Id must be a GUID." });
+                        return;
+                    }
+
+                    bool allowed = role switch
+                    {
+                        UserRole.SuperAdmin => await dbContext.Tenants.AsNoTracking().AnyAsync(t => t.Id == targetTenantId),
+                        UserRole.AgencyOwner when Guid.TryParse(agencyClaim, out var ownerAgencyId) =>
+                            await dbContext.Tenants.AsNoTracking().AnyAsync(t => t.Id == targetTenantId && t.AgencyId == ownerAgencyId),
+                        _ => false
+                    };
+
+                    if (!allowed)
+                    {
+                        context.Result = new ObjectResult(new { Error = "You don't have access to this client workspace." }) { StatusCode = 403 };
+                        return;
+                    }
+
+                    httpContext.Items["TenantId"] = targetTenantId;
+                    httpContext.Items["ActingAsTenant"] = true;
+                }
+
                 await next();
                 return;
             }
         }
 
-        // 2. Machine-to-Machine Authentication: Validate via X-Api-Key Header
-        if (!httpContext.Request.Headers.TryGetValue(ApiKeyHeaderName, out var extractedApiKey))
+        // 2. Machine-to-Machine Authentication: X-Api-Key header, or ?key= query parameter
+        //    (query form is for senders that can't set headers; prefer the header or the secret URL)
+        string? providedKey = null;
+        if (httpContext.Request.Headers.TryGetValue(ApiKeyHeaderName, out var headerKey) && !string.IsNullOrWhiteSpace(headerKey))
+            providedKey = headerKey.ToString().Trim();
+        else if (httpContext.Request.Query.TryGetValue(ApiKeyQueryName, out var queryKey) && !string.IsNullOrWhiteSpace(queryKey))
+            providedKey = queryKey.ToString().Trim();
+
+        if (string.IsNullOrEmpty(providedKey))
         {
             context.Result = new UnauthorizedObjectResult(new { Error = "Missing authentication token or API key." });
             return;
         }
-
-        var providedKey = extractedApiKey.ToString().Trim();
 
         // 2a. Check if Master API Key (SuperAdmin)
         var masterKey = configuration["MasterApiKey"];
@@ -95,6 +131,18 @@ public class ApiKeyAuthAttribute : Attribute, IAsyncActionFilter
         {
             context.Result = new UnauthorizedObjectResult(new { Error = "Invalid API key." });
             return;
+        }
+
+        // Agency clients: an inactive agency blocks its clients' keys too
+        if (tenant.AgencyId is Guid tenantAgencyId)
+        {
+            var agencyStatus = await dbContext.Agencies.AsNoTracking()
+                .Where(a => a.Id == tenantAgencyId).Select(a => a.BillingStatus).FirstOrDefaultAsync();
+            if (agencyStatus == "Suspended")
+            {
+                context.Result = new ObjectResult(new { Error = "The agency account is suspended due to unpaid invoices." }) { StatusCode = 402 };
+                return;
+            }
         }
 
         if (tenant.BillingStatus == "Suspended")

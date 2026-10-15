@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 using UniversalMiddleware.API.Helpers;
 using UniversalMiddleware.Domain;
@@ -11,7 +12,10 @@ using UniversalMiddleware.Infrastructure;
 
 namespace UniversalMiddleware.API.Controllers;
 
-public record GenerateInvoiceRequest(string? PlanId, decimal Amount, string? Currency, string PaymentMethod);
+public record GenerateInvoiceRequest(string? PlanId, decimal Amount, string? Currency, string PaymentMethod, bool AddWhiteLabel = false);
+
+/// <summary>SuperAdmin overrides at approval, mainly for custom Agency Platinum deals. All optional.</summary>
+public record ApproveInvoiceOverrides(decimal? Amount, int? MonthlyTaskQuota, int? MonthlyAiQuota, int? MaxSubTenants);
 
 [Authorize]
 [ApiController]
@@ -39,11 +43,26 @@ public class BillingController : ControllerBase
         return null;
     }
 
-    /// <summary>Public plan catalog (single-tenant).</summary>
+    /// <summary>Public plan catalog. ?audience=agency returns agency plans and the white-label add-on.</summary>
     [AllowAnonymous]
     [HttpGet("plans")]
-    public IActionResult GetPlans() =>
-        Ok(Plans.All.Select(p => new { p.Id, p.Name, p.PriceJod, p.PriceUsdRef, p.Tasks, p.AiTasks, p.Extras }));
+    public IActionResult GetPlans([FromQuery] string? audience)
+    {
+        if (string.Equals(audience, "agency", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ok(new
+            {
+                Plans = AgencyPlans.All.Select(p => new
+                {
+                    p.Id, p.Name, p.PriceJod, p.PriceUsdRef, p.MaxClients, p.Tasks, p.AiTasks,
+                    p.WhiteLabelIncluded, p.CustomPricing, p.Extras
+                }),
+                WhiteLabelAddOn = new { PriceJod = AgencyPlans.WhiteLabelAddOnJod, PriceUsdRef = AgencyPlans.WhiteLabelAddOnUsdRef }
+            });
+        }
+
+        return Ok(Plans.All.Select(p => new { p.Id, p.Name, p.PriceJod, p.PriceUsdRef, p.Tasks, p.AiTasks, p.Extras }));
+    }
 
     /// <summary>The caller's invoices, newest first.</summary>
     [HttpGet("my-invoices")]
@@ -68,13 +87,14 @@ public class BillingController : ControllerBase
             InvoiceId = i.Id,
             i.ReferenceCode,
             i.PlanId,
+            i.WhiteLabelAddOn,
             i.Amount,
             i.Currency,
             i.PaymentMethod,
+            Instructions = GetPaymentInstructions(i.PaymentMethod.ToLowerInvariant(), i.ReferenceCode),
             Status = i.Status switch { "Confirmed" => "Approved", "Rejected" => "Rejected", _ => "Pending" },
             i.CreatedAt,
-            ApprovedAt = i.PaidAt,
-            Instructions = GetPaymentInstructions(i.PaymentMethod.ToLowerInvariant(), i.ReferenceCode)
+            ApprovedAt = i.PaidAt
         }));
     }
 
@@ -97,6 +117,7 @@ public class BillingController : ControllerBase
         decimal amount;
         string currency;
         string? planId = null;
+        var addWhiteLabel = false;
 
         if (accountType == "Tenant")
         {
@@ -111,10 +132,15 @@ public class BillingController : ControllerBase
         }
         else
         {
-            // Agency plans aren't catalogued yet; keep the old behaviour but reject nonsense amounts.
-            if (request.Amount <= 0) return BadRequest(new { Error = "amount must be greater than 0." });
-            amount = request.Amount;
-            currency = string.IsNullOrWhiteSpace(request.Currency) ? "JOD" : request.Currency.Trim().ToUpperInvariant();
+            // Agencies buy an agency plan (+ optional white-label add-on); the server sets the price.
+            var plan = AgencyPlans.Find(request.PlanId);
+            if (plan == null)
+                return BadRequest(new { Error = "planId must be one of: agency_bronze, agency_silver, agency_gold, agency_platinum." });
+
+            planId = plan.Id;
+            addWhiteLabel = request.AddWhiteLabel && !plan.WhiteLabelIncluded;
+            amount = plan.PriceJod + (addWhiteLabel ? AgencyPlans.WhiteLabelAddOnJod : 0m);
+            currency = "JOD";
         }
 
         // Format: INV-YYYY-XXXXXX
@@ -125,6 +151,7 @@ public class BillingController : ControllerBase
             AccountId = accountId,
             AccountType = accountType,
             PlanId = planId,
+            WhiteLabelAddOn = addWhiteLabel,
             Amount = amount,
             Currency = currency,
             PaymentMethod = method,
@@ -135,13 +162,14 @@ public class BillingController : ControllerBase
         _context.PaymentInvoices.Add(invoice);
         await _context.SaveChangesAsync();
 
-        TelegramAlert.Fire($"💰 Invoice Generated\n{accountType}: {accountId}\nPlan: {planId ?? "-"}\nAmount: {amount} {currency}\nMethod: {method}\nRef: {referenceCode}");
+        TelegramAlert.Fire($"💰 Invoice Generated\n{accountType}: {accountId}\nPlan: {planId ?? "-"}{(addWhiteLabel ? " + white-label" : "")}\nAmount: {amount} {currency}\nMethod: {method}\nRef: {referenceCode}");
 
         return Ok(new
         {
             InvoiceId = invoice.Id,
             invoice.ReferenceCode,
             invoice.PlanId,
+            invoice.WhiteLabelAddOn,
             invoice.Amount,
             invoice.Currency,
             invoice.PaymentMethod,
@@ -152,7 +180,8 @@ public class BillingController : ControllerBase
     /// <summary>SuperAdmin: approve an invoice, apply its plan, activate the account for 30 days.</summary>
     [Authorize(Roles = "SuperAdmin")]
     [HttpPost("approve-invoice/{invoiceId:guid}")]
-    public async Task<IActionResult> ApproveInvoice(Guid invoiceId)
+    public async Task<IActionResult> ApproveInvoice(Guid invoiceId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] ApproveInvoiceOverrides? overrides)
     {
         Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var adminId);
 
@@ -162,6 +191,7 @@ public class BillingController : ControllerBase
         if (invoice.Status == "Rejected") return BadRequest(new { Error = "Invoice was rejected; generate a new one." });
 
         var now = DateTime.UtcNow;
+        if (overrides?.Amount is > 0m) invoice.Amount = overrides.Amount.Value; // record the negotiated price
         invoice.Status = "Confirmed";
         invoice.PaidAt = now;
         invoice.ConfirmedByAdminId = adminId;
@@ -172,11 +202,32 @@ public class BillingController : ControllerBase
             var agency = await _context.Agencies.FindAsync(invoice.AccountId);
             if (agency == null) return NotFound(new { Error = "Agency not found." });
 
+            var plan = AgencyPlans.Find(invoice.PlanId);
+            if (plan != null) AgencyPlans.Apply(agency, plan);
+            if (invoice.WhiteLabelAddOn) agency.WhiteLabel = true;
+            else if (plan != null && !plan.WhiteLabelIncluded) agency.WhiteLabel = false; // add-on not renewed
+
+            // Custom deal limits (Platinum)
+            if (overrides?.MonthlyTaskQuota is > 0) agency.MonthlyTaskQuota = overrides.MonthlyTaskQuota.Value;
+            if (overrides?.MonthlyAiQuota is >= 0) agency.MonthlyAiQuota = overrides.MonthlyAiQuota.Value;
+            if (overrides?.MaxSubTenants is > 0) agency.MaxSubTenants = overrides.MaxSubTenants.Value;
+
             agency.BillingStatus = "Active";
             agency.NextRenewalDate = NextRenewal(agency.NextRenewalDate, now);
             agency.TasksUsedThisMonth = 0;
             agency.AiTasksUsedThisMonth = 0;
-            applied = "agency renewal";
+
+            // Clients follow the agency's renewal date; their own counters reset too
+            var clients = await _context.Tenants.Where(t => t.AgencyId == agency.Id).ToListAsync();
+            foreach (var c in clients)
+            {
+                c.NextRenewalDate = agency.NextRenewalDate;
+                c.TasksUsedThisMonth = 0;
+                c.AiTasksUsedThisMonth = 0;
+                c.SubscriptionTier = agency.SubscriptionTier;
+            }
+
+            applied = plan != null ? $"agency plan {plan.Name}{(agency.WhiteLabel ? " (white-label)" : "")}" : "agency renewal";
         }
         else
         {

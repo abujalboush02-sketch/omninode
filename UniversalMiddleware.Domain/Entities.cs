@@ -213,6 +213,13 @@ public class Agency
     public DateTime NextRenewalDate { get; set; } = DateTime.UtcNow.AddDays(30);
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    // White-label client reports: included in Gold/Platinum, or bought as an add-on
+    public bool WhiteLabel { get; set; } = false;
+    public string? BrandName { get; set; }
+    public string? BrandLogoDataUrl { get; set; } // data:image/png;base64,... (max ~200 KB)
+    public string? BrandColor { get; set; }       // #RRGGBB
+    public string? ReportFooter { get; set; }
+
     // Navigation properties
     public ICollection<Tenant> Tenants { get; set; } = new List<Tenant>();
     public ICollection<User> Users { get; set; } = new List<User>();
@@ -247,7 +254,8 @@ public class PaymentInvoice
     public string PaymentMethod { get; set; } = "CliQ"; // CliQ, BankWire, Cash
     public string ReferenceCode { get; set; } = string.Empty; // e.g. "INV-2026-X" for matching CliQ/Wire memo
     public string Status { get; set; } = "Unpaid"; // Unpaid, Confirmed, Rejected
-    public string? PlanId { get; set; } // free|bronze|silver|gold|platinum (tenant invoices)
+    public string? PlanId { get; set; } // tenant: bronze..platinum | agency: agency_bronze..agency_platinum
+    public bool WhiteLabelAddOn { get; set; } = false; // agency invoices only
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
     public Guid? ConfirmedByAdminId { get; set; }

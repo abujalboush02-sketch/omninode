@@ -49,7 +49,8 @@ public class BillingLifecycleWorker : BackgroundService
     private async Task ProcessMonthlyResetsAsync(AppDbContext dbContext, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var currentCycle = now.ToString("yyyy-MM");
+        // The snapshot taken on the 1st holds the PREVIOUS month's usage, so label it with that month.
+        var currentCycle = now.AddMonths(-1).ToString("yyyy-MM");
 
         // Verify if a snapshot for the current cycle has already been created
         var alreadyArchived = await dbContext.UsageLedgers

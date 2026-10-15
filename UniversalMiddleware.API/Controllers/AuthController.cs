@@ -93,12 +93,10 @@ public class AuthController : ControllerBase
             {
                 Name = string.IsNullOrWhiteSpace(request.OrganizationName) ? $"{emailClean} Agency" : request.OrganizationName.Trim(),
                 OwnerEmail = emailClean,
-                SubscriptionTier = "Agency Bronze",
-                MaxSubTenants = 5,
-                MonthlyTaskQuota = 25000,
-                MonthlyAiQuota = 1000,
-                BillingStatus = "PendingPayment" // Activated upon CliQ / Wire approval
+                // Can set up clients and integrations right away; webhooks start after the first payment is approved.
+                BillingStatus = "PendingPayment"
             };
+            AgencyPlans.Apply(agency, AgencyPlans.Find("agency_bronze")!);
 
             _context.Agencies.Add(agency);
             user.Agency = agency;
