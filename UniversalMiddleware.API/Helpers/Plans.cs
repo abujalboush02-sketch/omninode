@@ -14,7 +14,7 @@ public static class Plans
 {
     public static readonly IReadOnlyList<PlanDef> All = new List<PlanDef>
     {
-        new("free",     "Free",     0m,   0m,   150,     0,     new[] { "Community support" }),
+        new("free",     "Free Trial", 0m, 0m,   150,     20,    new[] { "14-day trial", "All features", "Community support" }),
         new("bronze",   "Bronze",   14m,  19m,  2_500,   0,     new[] { "Email support" }),
         new("silver",   "Silver",   35m,  49m,  10_000,  250,   new[] { "Email support", "Most popular" }),
         new("gold",     "Gold",     85m,  119m, 35_000,  1_000, new[] { "Priority email support" }),
@@ -26,13 +26,16 @@ public static class Plans
     {
         if (string.IsNullOrWhiteSpace(idOrName)) return null;
         var key = idOrName.Trim();
-        if (key.Equals("starter", StringComparison.OrdinalIgnoreCase)) key = "free";
+        if (key.Equals("starter", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("free", StringComparison.OrdinalIgnoreCase)) key = "free";
         return All.FirstOrDefault(p =>
             p.Id.Equals(key, StringComparison.OrdinalIgnoreCase) ||
             p.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
     }
 
     public static bool IsFree(Tenant tenant) => Find(tenant.SubscriptionTier)?.Id == "free";
+
+    public const int TrialDays = 14;
 
     public static void Apply(Tenant tenant, PlanDef plan)
     {
@@ -61,6 +64,8 @@ public static class AgencyPlans
 
     public static readonly IReadOnlyList<AgencyPlanDef> All = new List<AgencyPlanDef>
     {
+        new("agency_trial",    "Agency Trial",    0m,       0m,   2,   1_000,   50,     false, false,
+            new[] { "14-day trial", "2 clients", "All agency features" }),
         new("agency_bronze",   "Agency Bronze",   70.191m,  99m,  5,   30_000,  1_000,  false, false,
             new[] { "Multi-client management", "Pooled task quota" }),
         new("agency_silver",   "Agency Silver",   176.541m, 249m, 15,  80_000,  5_000,  false, false,

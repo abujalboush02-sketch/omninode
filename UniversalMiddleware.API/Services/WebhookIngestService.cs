@@ -15,8 +15,8 @@ namespace UniversalMiddleware.API.Services;
 /// </summary>
 public class WebhookIngestService
 {
-    private static readonly string[] InactiveTenant = { "Suspended", "Paused" };
-    private static readonly string[] InactiveAgency = { "Suspended", "PendingPayment" };
+    private static readonly string[] InactiveTenant = { "Suspended", "Paused", "TrialExpired" };
+    private static readonly string[] InactiveAgency = { "Suspended", "PendingPayment", "TrialExpired" };
 
     private readonly AppDbContext _db;
 
@@ -39,9 +39,12 @@ public class WebhookIngestService
                     return new NotFoundObjectResult(new { Error = "Tenant record not found." });
 
                 if (InactiveTenant.Contains(tenant.BillingStatus))
-                    return Error(402, tenant.BillingStatus == "Paused"
-                        ? "This workspace is paused by its agency. Webhook processing is paused."
-                        : "Tenant account is suspended due to unpaid invoices. Webhook processing is paused.", tenant, null);
+                    return Error(402, tenant.BillingStatus switch
+                    {
+                        "Paused" => "This workspace is paused by its agency. Webhook processing is paused.",
+                        "TrialExpired" => "Your free trial has ended. Choose a plan to keep receiving webhooks.",
+                        _ => "Tenant account is suspended due to unpaid invoices. Webhook processing is paused."
+                    }, tenant, null);
 
                 Agency? agency = null;
                 if (tenant.AgencyId is Guid agencyId)
@@ -51,9 +54,12 @@ public class WebhookIngestService
                         return new NotFoundObjectResult(new { Error = "Agency record not found." });
 
                     if (InactiveAgency.Contains(agency.BillingStatus))
-                        return Error(402, agency.BillingStatus == "PendingPayment"
-                            ? "The agency plan isn't active yet. Webhooks start once the first payment is confirmed."
-                            : "The agency account is suspended due to unpaid invoices. Webhook processing is paused.", tenant, agency);
+                        return Error(402, agency.BillingStatus switch
+                        {
+                            "PendingPayment" => "The agency plan isn't active yet. Webhooks start once the first payment is confirmed.",
+                            "TrialExpired" => "The agency's free trial has ended. Webhooks resume once a plan is active.",
+                            _ => "The agency account is suspended due to unpaid invoices. Webhook processing is paused."
+                        }, tenant, agency);
                 }
 
                 // 1. Client / standalone tenant quota (atomic, 110% grace)
@@ -133,7 +139,8 @@ public class WebhookIngestService
                     Status = "Pending",
                     RetryCount = 0,
                     MaxRetries = 5,
-                    ReceivedAt = DateTime.UtcNow
+                    ReceivedAt = DateTime.UtcNow,
+                    IsAi = isAi
                 });
 
                 await _db.SaveChangesAsync();

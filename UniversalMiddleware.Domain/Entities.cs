@@ -36,6 +36,9 @@ public class Tenant
     [Required]
     public string ApiKeyHash { get; set; } = string.Empty;
 
+    // Non-secret hint of the current key (e.g. "um_live_3f…a91c") so owners can recognise it.
+    public string? ApiKeyHint { get; set; }
+
     public string? BillingProvider { get; set; }
     public string? ExternalBillingReference { get; set; }
 
@@ -162,6 +165,9 @@ public class RawEvent
     public DateTime? LastAttemptAt { get; set; }
     public string FailureReason { get; set; } = string.Empty;
 
+    // True for unstructured (AI) webhooks; used for AI usage analytics
+    public bool IsAi { get; set; } = false;
+
     public virtual Endpoint? Endpoint { get; set; }
 }
 
@@ -256,6 +262,7 @@ public class PaymentInvoice
     public string Status { get; set; } = "Unpaid"; // Unpaid, Confirmed, Rejected
     public string? PlanId { get; set; } // tenant: bronze..platinum | agency: agency_bronze..agency_platinum
     public bool WhiteLabelAddOn { get; set; } = false; // agency invoices only
+    public DateTime? PaymentReportedAt { get; set; }   // customer clicked "I've paid"
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
     public Guid? ConfirmedByAdminId { get; set; }
@@ -273,6 +280,17 @@ public class UsageLedger
     public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
 }
 
+
+/// <summary>One row per reminder sent, so each reminder goes out once per billing cycle.</summary>
+public class ReminderLog
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string AccountType { get; set; } = "Tenant"; // Tenant | Agency | System
+    public Guid AccountId { get; set; }
+    public string Kind { get; set; } = string.Empty;    // due_7, due_3, due_1, overdue, suspended, trial_3, trial_1, trial_expired, digest
+    public string CycleKey { get; set; } = string.Empty; // renewal date (yyyy-MM-dd) the reminder belongs to
+    public DateTime SentAt { get; set; } = DateTime.UtcNow;
+}
 
 public class PasswordResetToken
 {

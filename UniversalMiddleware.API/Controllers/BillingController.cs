@@ -75,6 +75,7 @@ public class BillingController : ControllerBase
         if (account == null) return Ok(Array.Empty<object>());
 
         var (accountId, accountType) = account.Value;
+        var accountName = await AccountName(accountId, accountType);
         var invoices = await _context.PaymentInvoices
             .AsNoTracking()
             .Where(i => i.AccountId == accountId && i.AccountType == accountType)
@@ -91,9 +92,12 @@ public class BillingController : ControllerBase
             i.Amount,
             i.Currency,
             i.PaymentMethod,
+            PlanName = PlanName(i.PlanId),
             Instructions = GetPaymentInstructions(i.PaymentMethod.ToLowerInvariant(), i.ReferenceCode),
+            TransferNote = TransferNote(i, accountName),
             Status = i.Status switch { "Confirmed" => "Approved", "Rejected" => "Rejected", _ => "Pending" },
             i.CreatedAt,
+            i.PaymentReportedAt,
             ApprovedAt = i.PaidAt
         }));
     }
@@ -134,7 +138,7 @@ public class BillingController : ControllerBase
         {
             // Agencies buy an agency plan (+ optional white-label add-on); the server sets the price.
             var plan = AgencyPlans.Find(request.PlanId);
-            if (plan == null)
+            if (plan == null || plan.PriceJod == 0m)
                 return BadRequest(new { Error = "planId must be one of: agency_bronze, agency_silver, agency_gold, agency_platinum." });
 
             planId = plan.Id;
@@ -162,7 +166,8 @@ public class BillingController : ControllerBase
         _context.PaymentInvoices.Add(invoice);
         await _context.SaveChangesAsync();
 
-        TelegramAlert.Fire($"💰 Invoice Generated\n{accountType}: {accountId}\nPlan: {planId ?? "-"}{(addWhiteLabel ? " + white-label" : "")}\nAmount: {amount} {currency}\nMethod: {method}\nRef: {referenceCode}");
+        var name = await AccountName(accountId, accountType);
+        TelegramAlert.Fire($"💰 Invoice Generated\n{accountType}: {name}\nPlan: {planId ?? "-"}{(addWhiteLabel ? " + white-label" : "")}\nAmount: {amount} {currency}\nMethod: {method}\nRef: {referenceCode}");
 
         return Ok(new
         {
@@ -173,8 +178,38 @@ public class BillingController : ControllerBase
             invoice.Amount,
             invoice.Currency,
             invoice.PaymentMethod,
-            Instructions = GetPaymentInstructions(method, referenceCode)
+            PlanName = PlanName(invoice.PlanId),
+            Instructions = GetPaymentInstructions(method, referenceCode),
+            TransferNote = TransferNote(invoice, name)
         });
+    }
+
+    /// <summary>Customer says they've paid; alerts the admin. Doesn't activate anything by itself.</summary>
+    [HttpPost("invoices/{invoiceId:guid}/report-payment")]
+    public async Task<IActionResult> ReportPayment(Guid invoiceId)
+    {
+        var user = await CurrentUser();
+        if (user == null) return Unauthorized();
+        var account = BillableAccount(user);
+        if (account == null) return NotFound(new { Error = "Invoice not found." });
+
+        var (accountId, accountType) = account.Value;
+        var invoice = await _context.PaymentInvoices
+            .FirstOrDefaultAsync(i => i.Id == invoiceId && i.AccountId == accountId && i.AccountType == accountType);
+        if (invoice == null) return NotFound(new { Error = "Invoice not found." });
+        if (invoice.Status != "Unpaid") return BadRequest(new { Error = "This invoice is already closed." });
+
+        var first = invoice.PaymentReportedAt == null;
+        invoice.PaymentReportedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        if (first)
+        {
+            var name = await AccountName(accountId, accountType);
+            TelegramAlert.Fire($"✅ Payment reported\n{accountType}: {name}\nRef: {invoice.ReferenceCode}\nAmount: {invoice.Amount} {invoice.Currency}\nMethod: {invoice.PaymentMethod}\nCheck the bank and approve.");
+        }
+
+        return Ok(new { invoice.ReferenceCode, invoice.PaymentReportedAt, Message = "Thanks! We'll activate your plan once the payment is confirmed." });
     }
 
     /// <summary>SuperAdmin: approve an invoice, apply its plan, activate the account for 30 days.</summary>
@@ -202,6 +237,7 @@ public class BillingController : ControllerBase
             var agency = await _context.Agencies.FindAsync(invoice.AccountId);
             if (agency == null) return NotFound(new { Error = "Agency not found." });
 
+            var wasTrialAgency = agency.BillingStatus is "Trial" or "TrialExpired";
             var plan = AgencyPlans.Find(invoice.PlanId);
             if (plan != null) AgencyPlans.Apply(agency, plan);
             if (invoice.WhiteLabelAddOn) agency.WhiteLabel = true;
@@ -213,7 +249,7 @@ public class BillingController : ControllerBase
             if (overrides?.MaxSubTenants is > 0) agency.MaxSubTenants = overrides.MaxSubTenants.Value;
 
             agency.BillingStatus = "Active";
-            agency.NextRenewalDate = NextRenewal(agency.NextRenewalDate, now);
+            agency.NextRenewalDate = wasTrialAgency ? now.AddDays(30) : NextRenewal(agency.NextRenewalDate, now);
             agency.TasksUsedThisMonth = 0;
             agency.AiTasksUsedThisMonth = 0;
 
@@ -234,11 +270,12 @@ public class BillingController : ControllerBase
             var tenant = await _context.Tenants.FindAsync(invoice.AccountId);
             if (tenant == null) return NotFound(new { Error = "Tenant not found." });
 
+            var wasTrialTenant = tenant.BillingStatus is "Trial" or "TrialExpired";
             var plan = Plans.Find(invoice.PlanId);
             if (plan != null && plan.Id != "free") Plans.Apply(tenant, plan);
 
             tenant.BillingStatus = "Active";
-            tenant.NextRenewalDate = NextRenewal(tenant.NextRenewalDate, now);
+            tenant.NextRenewalDate = wasTrialTenant ? now.AddDays(30) : NextRenewal(tenant.NextRenewalDate, now);
             tenant.TasksUsedThisMonth = 0;
             tenant.AiTasksUsedThisMonth = 0;
             applied = plan != null ? $"plan {plan.Name}" : "renewal (no plan on invoice)";
@@ -272,6 +309,23 @@ public class BillingController : ControllerBase
         return invoice == null ? NotFound(new { Error = "Invoice not found." }) : Ok(invoice);
     }
 
+    private async Task<string> AccountName(Guid accountId, string accountType) =>
+        accountType == "Agency"
+            ? await _context.Agencies.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.Name).FirstOrDefaultAsync() ?? "Agency"
+            : await _context.Tenants.AsNoTracking().Where(t => t.Id == accountId).Select(t => t.Name).FirstOrDefaultAsync() ?? "Workspace";
+
+    private static string? PlanName(string? planId) =>
+        Plans.Find(planId)?.Name ?? AgencyPlans.Find(planId)?.Name;
+
+    /// <summary>One line the customer pastes into the bank/CliQ description; everything we need to match the payment.</summary>
+    private static string TransferNote(PaymentInvoice i, string accountName)
+    {
+        var plan = PlanName(i.PlanId) ?? "Plan";
+        var addOn = i.WhiteLabelAddOn ? " + White-label" : "";
+        var name = accountName.Length > 40 ? accountName[..40] : accountName;
+        return $"OmniNode | {i.ReferenceCode} | {name} | {plan}{addOn} | {i.Amount:0.###} {i.Currency}";
+    }
+
     // Paying early extends from the current renewal date, so customers never lose days.
     private static DateTime NextRenewal(DateTime current, DateTime now) =>
         (current > now ? current : now).AddDays(30);
@@ -284,7 +338,7 @@ public class BillingController : ControllerBase
             Alias = "OMNINODE",
             Bank = "Arab Bank",
             RequiredMemo = refCode,
-            Note = "Please paste the exact ReferenceCode into the transfer description."
+            Note = "Copy the transfer message and paste it into the CliQ transfer description."
         },
         "bankwire" => new
         {

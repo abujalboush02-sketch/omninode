@@ -65,9 +65,12 @@ public class AgenciesController : ControllerBase
     }
 
     private static IActionResult? BlockIfSuspended(Agency agency, ControllerBase c) =>
-        agency.BillingStatus == "Suspended"
-            ? c.StatusCode(402, new { Error = "Agency account is suspended due to unpaid invoices. Pay to make changes." })
-            : null;
+        agency.BillingStatus switch
+        {
+            "Suspended" => c.StatusCode(402, new { Error = "Agency account is suspended due to unpaid invoices. Pay to make changes." }),
+            "TrialExpired" => c.StatusCode(402, new { Error = "Your free trial has ended. Choose a plan to make changes." }),
+            _ => null
+        };
 
     // ---------- agency ----------
 
@@ -199,6 +202,7 @@ public class AgenciesController : ControllerBase
                 t.AiTasksQuota,
                 t.AiTasksUsedThisMonth,
                 t.BillingStatus,
+                t.ApiKeyHint,
                 EndpointCount = _context.Endpoints.Count(e => e.TenantId == t.Id),
                 ConnectionCount = _context.Connections.Count(c =>
                     _context.Endpoints.Any(e => e.Id == c.SourceEndpointId && e.TenantId == t.Id)),
@@ -234,6 +238,7 @@ public class AgenciesController : ControllerBase
 
         var (rawKey, hash) = ApiKeys.Generate();
         var name = request.Name.Trim();
+        var hint = ApiKeys.Hint(rawKey);
 
         var tenant = new Tenant
         {
@@ -244,6 +249,7 @@ public class AgenciesController : ControllerBase
             TenantType = "AgencySubTenant",
             SubscriptionTier = agency.SubscriptionTier,
             ApiKeyHash = hash,
+            ApiKeyHint = hint,
             AgencyId = agency.Id,
             MonthlyTaskQuota = tasks,
             AiTasksQuota = ai,
@@ -483,6 +489,157 @@ public class AgenciesController : ControllerBase
         });
     }
 
+    // ---------- analytics ----------
+
+    /// <summary>
+    /// Time-series analytics across clients. from/to are UTC dates (to exclusive, max 366 days),
+    /// tenantIds = comma-separated (empty = all clients), groupBy = day | week | month.
+    /// One webhook = one task, so tasks per bucket = events received.
+    /// </summary>
+    [HttpGet("analytics")]
+    public async Task<IActionResult> Analytics([FromQuery] DateTime? from, [FromQuery] DateTime? to,
+        [FromQuery] string? tenantIds, [FromQuery] string? groupBy)
+    {
+        var (agency, error) = await MyAgency();
+        if (error != null) return error;
+
+        var unit = (groupBy ?? "day").Trim().ToLowerInvariant();
+        if (unit is not ("day" or "week" or "month"))
+            return BadRequest(new { Error = "groupBy must be day, week or month." });
+
+        var end = DateTime.SpecifyKind((to ?? DateTime.UtcNow.Date.AddDays(1)).Date, DateTimeKind.Utc);
+        var start = DateTime.SpecifyKind((from ?? end.AddDays(-30)).Date, DateTimeKind.Utc);
+        if (start >= end) return BadRequest(new { Error = "from must be before to." });
+        if ((end - start).TotalDays > 366) return BadRequest(new { Error = "Range can't exceed 366 days." });
+
+        var clients = await ClientsFor(agency!.Id, tenantIds);
+        if (clients == null) return BadRequest(new { Error = "tenantIds must be client ids of your agency." });
+        var ids = clients.Select(c => c.Id).ToArray();
+
+        var rows = ids.Length == 0
+            ? new List<BucketRow>()
+            : await _context.Database.SqlQuery<BucketRow>($@"
+                SELECT ""TenantId"" AS ""TenantId"",
+                       date_trunc({unit}, ""ReceivedAt"" AT TIME ZONE 'UTC') AS ""Bucket"",
+                       ""Status"" AS ""Status"",
+                       ""IsAi"" AS ""IsAi"",
+                       COUNT(*)::int AS ""Count""
+                FROM ""RawEvents""
+                WHERE ""TenantId"" = ANY({ids}) AND ""ReceivedAt"" >= {start} AND ""ReceivedAt"" < {end}
+                GROUP BY 1, 2, 3, 4").ToListAsync();
+
+        static object Sum(IEnumerable<BucketRow> r) => new
+        {
+            Tasks = r.Sum(x => x.Count),
+            AiTasks = r.Where(x => x.IsAi).Sum(x => x.Count),
+            Processed = r.Where(x => x.Status == "Processed").Sum(x => x.Count),
+            Failed = r.Where(x => x.Status == "Failed_ManualReviewRequired").Sum(x => x.Count),
+            Pending = r.Where(x => x.Status is "Pending" or "Processing").Sum(x => x.Count)
+        };
+
+        return Ok(new
+        {
+            From = start,
+            To = end,
+            GroupBy = unit,
+            Totals = Sum(rows),
+            Series = rows.GroupBy(r => r.Bucket).OrderBy(g => g.Key)
+                .Select(g => new { Bucket = g.Key.ToString("yyyy-MM-dd"), Stats = Sum(g) }),
+            Clients = clients.Select(c =>
+            {
+                var mine = rows.Where(r => r.TenantId == c.Id).ToList();
+                return new
+                {
+                    TenantId = c.Id,
+                    c.Name,
+                    c.BillingStatus,
+                    c.MonthlyTaskQuota,
+                    c.TasksUsedThisMonth,
+                    c.AiTasksQuota,
+                    c.AiTasksUsedThisMonth,
+                    Stats = Sum(mine),
+                    Series = mine.GroupBy(r => r.Bucket).OrderBy(g => g.Key)
+                        .Select(g => new { Bucket = g.Key.ToString("yyyy-MM-dd"), Stats = Sum(g) })
+                };
+            })
+        });
+    }
+
+    /// <summary>Event search across clients (default: failed). Paged, newest first. Payload not included.</summary>
+    [HttpGet("events")]
+    public async Task<IActionResult> Events([FromQuery] string? status, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+        [FromQuery] string? tenantIds, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var (agency, error) = await MyAgency();
+        if (error != null) return error;
+
+        var clients = await ClientsFor(agency!.Id, tenantIds);
+        if (clients == null) return BadRequest(new { Error = "tenantIds must be client ids of your agency." });
+        var ids = clients.Select(c => c.Id).ToList();
+        var names = clients.ToDictionary(c => c.Id, c => c.Name);
+
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+        var wanted = (status ?? "failed").Trim().ToLowerInvariant();
+
+        var q = _context.RawEvents.AsNoTracking().Where(e => ids.Contains(e.TenantId));
+        q = wanted switch
+        {
+            "failed" => q.Where(e => e.Status == "Failed_ManualReviewRequired"),
+            "processed" => q.Where(e => e.Status == "Processed"),
+            "pending" => q.Where(e => e.Status == "Pending" || e.Status == "Processing"),
+            _ => q
+        };
+        if (from.HasValue) { var f = DateTime.SpecifyKind(from.Value, DateTimeKind.Utc); q = q.Where(e => e.ReceivedAt >= f); }
+        if (to.HasValue) { var t = DateTime.SpecifyKind(to.Value, DateTimeKind.Utc); q = q.Where(e => e.ReceivedAt < t); }
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim();
+            q = Guid.TryParse(term, out var gid)
+                ? q.Where(e => e.Id == gid || e.EndpointId == gid)
+                : q.Where(e => EF.Functions.ILike(e.FailureReason, $"%{term}%"));
+        }
+
+        var total = await q.CountAsync();
+        var items = await q.OrderByDescending(e => e.ReceivedAt)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(e => new { e.Id, e.TenantId, e.EndpointId, e.Status, e.IsAi, e.ReceivedAt, e.LastAttemptAt, e.RetryCount, e.FailureReason })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            Total = total,
+            Page = page,
+            PageSize = pageSize,
+            Items = items.Select(e => new
+            {
+                e.Id, e.TenantId, ClientName = names.GetValueOrDefault(e.TenantId),
+                e.EndpointId, e.Status, e.IsAi, e.ReceivedAt, e.LastAttemptAt, e.RetryCount, e.FailureReason
+            })
+        });
+    }
+
+    /// <summary>Agency's clients, optionally narrowed to a comma-separated id list. Null if any id isn't theirs.</summary>
+    private async Task<List<ClientInfo>?> ClientsFor(Guid agencyId, string? tenantIds)
+    {
+        var all = await _context.Tenants.AsNoTracking()
+            .Where(t => t.AgencyId == agencyId)
+            .Select(t => new ClientInfo(t.Id, t.Name, t.BillingStatus, t.MonthlyTaskQuota, t.TasksUsedThisMonth, t.AiTasksQuota, t.AiTasksUsedThisMonth))
+            .ToListAsync();
+
+        if (string.IsNullOrWhiteSpace(tenantIds)) return all;
+
+        var wanted = new HashSet<Guid>();
+        foreach (var part in tenantIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!Guid.TryParse(part, out var id) || all.All(c => c.Id != id)) return null;
+            wanted.Add(id);
+        }
+        return all.Where(c => wanted.Contains(c.Id)).ToList();
+    }
+
+    private record ClientInfo(Guid Id, string Name, string BillingStatus, int MonthlyTaskQuota, int TasksUsedThisMonth, int AiTasksQuota, int AiTasksUsedThisMonth);
+
     // ---------- helpers ----------
 
     private IActionResult? CheckPool(Agency agency, Guid? excludeTenantId, int tasks, int ai)
@@ -513,4 +670,14 @@ public class AgenciesController : ControllerBase
         var v = value.Trim();
         return v.Length > max ? v[..max] : v;
     }
+}
+
+/// <summary>Row shape for the analytics SQL query.</summary>
+public class BucketRow
+{
+    public Guid TenantId { get; set; }
+    public DateTime Bucket { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public bool IsAi { get; set; }
+    public int Count { get; set; }
 }

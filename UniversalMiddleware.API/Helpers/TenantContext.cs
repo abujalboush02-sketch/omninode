@@ -28,6 +28,10 @@ public static class ApiKeys
     public static string Hash(string raw) =>
         Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
 
+    /// <summary>Non-secret hint shown to owners, e.g. "um_live_3f…a91c".</summary>
+    public static string Hint(string raw) =>
+        raw.Length <= 14 ? "…" : raw[..10] + "…" + raw[^4..];
+
     /// <summary>URL-safe random secret, e.g. for webhook paths and reset tokens.</summary>
     public static string RandomUrlSafe(string prefix, int bytes = 24) =>
         prefix + Convert.ToBase64String(RandomNumberGenerator.GetBytes(bytes))

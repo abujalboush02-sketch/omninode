@@ -79,10 +79,12 @@ public class AuthController : ControllerBase
                 OwnerEmail = emailClean,
                 PlanType = "Standalone",
                 TenantType = "Standalone",
-                BillingStatus = "Active",
-                ApiKeyHash = hash
+                BillingStatus = "Trial",
+                NextRenewalDate = DateTime.UtcNow.AddDays(Plans.TrialDays), // trial end
+                ApiKeyHash = hash,
+                ApiKeyHint = ApiKeys.Hint(raw)
             };
-            Plans.Apply(tenant, free); // Free: 150 tasks, 0 AI
+            Plans.Apply(tenant, free); // Free Trial: 14 days, 150 tasks, 20 AI
 
             _context.Tenants.Add(tenant);
             user.Tenant = tenant;
@@ -93,10 +95,11 @@ public class AuthController : ControllerBase
             {
                 Name = string.IsNullOrWhiteSpace(request.OrganizationName) ? $"{emailClean} Agency" : request.OrganizationName.Trim(),
                 OwnerEmail = emailClean,
-                // Can set up clients and integrations right away; webhooks start after the first payment is approved.
-                BillingStatus = "PendingPayment"
+                // 14-day trial with small limits; buying a plan replaces them.
+                BillingStatus = "Trial",
+                NextRenewalDate = DateTime.UtcNow.AddDays(Plans.TrialDays)
             };
-            AgencyPlans.Apply(agency, AgencyPlans.Find("agency_bronze")!);
+            AgencyPlans.Apply(agency, AgencyPlans.Find("agency_trial")!);
 
             _context.Agencies.Add(agency);
             user.Agency = agency;
@@ -176,6 +179,76 @@ public class AuthController : ControllerBase
             user.CreatedAt,
             user.LastLoginAt
         });
+    }
+
+    /// <summary>Updates the organisation (tenant or agency) name and owner name.</summary>
+    [Authorize]
+    [HttpPut("profile")]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
+    {
+        if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)) return Unauthorized();
+
+        var user = await _context.Users.Include(u => u.Tenant).Include(u => u.Agency).FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null) return Unauthorized();
+
+        var org = request.OrganizationName?.Trim();
+        var owner = request.OwnerName?.Trim();
+        if (org != null && (org.Length < 2 || org.Length > 255))
+            return BadRequest(new { Error = "Organization name must be 2-255 characters." });
+        if (owner != null && owner.Length > 255)
+            return BadRequest(new { Error = "Owner name is too long." });
+
+        if (user.Agency != null)
+        {
+            if (!string.IsNullOrEmpty(org)) user.Agency.Name = org;
+        }
+        else if (user.Tenant != null)
+        {
+            if (!string.IsNullOrEmpty(org)) user.Tenant.Name = org;
+            if (!string.IsNullOrEmpty(owner)) user.Tenant.OwnerName = owner;
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(new
+        {
+            OrganizationName = user.Agency?.Name ?? user.Tenant?.Name,
+            OwnerName = user.Tenant?.OwnerName
+        });
+    }
+
+    /// <summary>Changes the login email (password required). Returns a fresh token with the new email.</summary>
+    [Authorize]
+    [HttpPost("change-email")]
+    public async Task<IActionResult> ChangeEmail([FromBody] ChangeEmailRequest request)
+    {
+        if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)) return Unauthorized();
+
+        var newEmail = (request.NewEmail ?? string.Empty).Trim().ToLowerInvariant();
+        if (!newEmail.Contains('@') || newEmail.Length > 255)
+            return BadRequest(new { Error = "A valid email is required." });
+
+        var user = await _context.Users.Include(u => u.Tenant).Include(u => u.Agency).FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null) return Unauthorized();
+
+        if (!_hasher.VerifyPassword(request.Password ?? string.Empty, user.PasswordHash))
+            return BadRequest(new { Error = "Password is incorrect." });
+
+        if (newEmail == user.Email) return BadRequest(new { Error = "That's already your email." });
+        if (await _context.Users.AnyAsync(u => u.Email == newEmail))
+            return BadRequest(new { Error = "An account with this email already exists." });
+
+        var oldEmail = user.Email;
+        user.Email = newEmail;
+        if (user.Tenant != null && user.Tenant.OwnerEmail == oldEmail) user.Tenant.OwnerEmail = newEmail;
+        if (user.Agency != null && user.Agency.OwnerEmail == oldEmail) user.Agency.OwnerEmail = newEmail;
+
+        await _context.SaveChangesAsync();
+
+        await _email.SendAsync(oldEmail, "Your OmniNode email was changed",
+            $"<p>The login email for your OmniNode account was changed to {WebUtility.HtmlEncode(newEmail)}.</p>" +
+            "<p>If this wasn't you, contact support immediately.</p>");
+
+        return Ok(new { Token = _tokenService.GenerateToken(user), user.Email });
     }
 
     [Authorize]
@@ -268,3 +341,5 @@ public record LoginRequest(string Email, string Password);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
+public record UpdateProfileRequest(string? OrganizationName, string? OwnerName);
+public record ChangeEmailRequest(string NewEmail, string Password);

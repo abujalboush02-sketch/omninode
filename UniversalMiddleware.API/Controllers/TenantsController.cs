@@ -42,6 +42,7 @@ public class TenantsController : ControllerBase
             TenantType = "Standalone",
             BillingStatus = "Active",
             ApiKeyHash = hash,
+            ApiKeyHint = ApiKeys.Hint(raw),
             TasksUsedThisMonth = 0
         };
         Plans.Apply(tenant, plan);
@@ -73,6 +74,7 @@ public class TenantsController : ControllerBase
 
         var (raw, hash) = ApiKeys.Generate();
         tenant.ApiKeyHash = hash;
+        tenant.ApiKeyHint = ApiKeys.Hint(raw);
         await _context.SaveChangesAsync();
 
         return Ok(new { ApiKey = raw, Message = "Please save this API key securely. It will not be shown again." });
@@ -94,6 +96,9 @@ public class TenantsController : ControllerBase
         t.TasksUsedThisMonth,
         t.AiTasksQuota,
         t.AiTasksUsedThisMonth,
-        IsFree = Plans.IsFree(t)
+        t.ApiKeyHint,
+        IsFree = Plans.IsFree(t),
+        IsTrial = t.BillingStatus == "Trial" || t.BillingStatus == "TrialExpired",
+        TrialEndsAt = t.BillingStatus == "Trial" || t.BillingStatus == "TrialExpired" ? t.NextRenewalDate : (DateTime?)null
     };
 }
