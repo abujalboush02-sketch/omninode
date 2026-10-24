@@ -15,7 +15,7 @@ using UniversalMiddleware.Infrastructure;
 namespace UniversalMiddleware.API.Controllers;
 
 public record CreateSubTenantRequest(string Name, string? OwnerEmail, int? AllocatedTaskQuota, int? AllocatedAiQuota);
-public record UpdateQuotaRequest(int MonthlyTaskQuota, int AiTasksQuota);
+public record UpdateQuotaRequest(int? MonthlyTaskQuota, int? AiTasksQuota, int? AllocatedTaskQuota, int? AllocatedAiQuota);
 public record UpdateSubTenantRequest(string? Name, string? OwnerEmail);
 public record BrandingRequest(string? BrandName, string? BrandLogoDataUrl, string? BrandColor, string? ReportFooter);
 
@@ -293,14 +293,19 @@ public class AgenciesController : ControllerBase
         var tenant = agency!.Tenants.FirstOrDefault(t => t.Id == subTenantId);
         if (tenant == null) return NotFound(new { Error = "Client not found within your agency." });
 
-        if (request.MonthlyTaskQuota < 0 || request.AiTasksQuota < 0)
+        int? tasks = request.MonthlyTaskQuota ?? request.AllocatedTaskQuota;
+        int? ai = request.AiTasksQuota ?? request.AllocatedAiQuota;
+        if (tasks is null || ai is null)
+            return BadRequest(new { Error = "Send monthlyTaskQuota and aiTasksQuota." });
+
+        if (tasks < 0 || ai < 0)
             return BadRequest(new { Error = "Allocations can't be negative." });
 
-        var poolError = CheckPool(agency, subTenantId, request.MonthlyTaskQuota, request.AiTasksQuota);
+        var poolError = CheckPool(agency, subTenantId, tasks.Value, ai.Value);
         if (poolError != null) return poolError;
 
-        tenant.MonthlyTaskQuota = request.MonthlyTaskQuota;
-        tenant.AiTasksQuota = request.AiTasksQuota;
+        tenant.MonthlyTaskQuota = tasks.Value;
+        tenant.AiTasksQuota = ai.Value;
         await _context.SaveChangesAsync();
 
         return Ok(new { tenant.Id, tenant.Name, tenant.MonthlyTaskQuota, tenant.AiTasksQuota, tenant.TasksUsedThisMonth });
