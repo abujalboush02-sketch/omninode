@@ -411,6 +411,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTime?>("PaymentReportedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("PlanId")
                         .HasColumnType("text");
 
@@ -446,6 +449,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("IsAi")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTime?>("LastAttemptAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -474,10 +480,44 @@ namespace UniversalMiddleware.Infrastructure.Migrations
 
                     b.HasIndex("EndpointId");
 
+                    b.HasIndex("TenantId", "ReceivedAt");
+
                     b.HasIndex("Status", "LastAttemptAt", "ReceivedAt")
                         .HasDatabaseName("IX_RawEvent_WorkerQueue");
 
                     b.ToTable("RawEvents");
+                });
+
+            modelBuilder.Entity("UniversalMiddleware.Domain.ReminderLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AccountType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("CycleKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId", "Kind", "CycleKey")
+                        .IsUnique();
+
+                    b.ToTable("ReminderLogs");
                 });
 
             modelBuilder.Entity("UniversalMiddleware.Domain.SchemaTemplate", b =>
@@ -516,6 +556,9 @@ namespace UniversalMiddleware.Infrastructure.Migrations
 
                     b.Property<string>("ApiKeyHash")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ApiKeyHint")
                         .HasColumnType("text");
 
                     b.Property<string>("BillingProvider")
