@@ -138,14 +138,14 @@ public class ApiKeyAuthAttribute : Attribute, IAsyncActionFilter
         {
             var agencyStatus = await dbContext.Agencies.AsNoTracking()
                 .Where(a => a.Id == tenantAgencyId).Select(a => a.BillingStatus).FirstOrDefaultAsync();
-            if (agencyStatus == "Suspended")
+            if (agencyStatus == "Suspended" || agencyStatus == "TrialExpired")
             {
                 context.Result = new ObjectResult(new { Error = "The agency account is suspended due to unpaid invoices." }) { StatusCode = 402 };
                 return;
             }
         }
 
-        if (tenant.BillingStatus == "Suspended")
+        if (tenant.BillingStatus == "Suspended" || tenant.BillingStatus == "TrialExpired")
         {
             context.Result = new ObjectResult(new { Error = "Tenant account is suspended due to unpaid invoices." })
             {

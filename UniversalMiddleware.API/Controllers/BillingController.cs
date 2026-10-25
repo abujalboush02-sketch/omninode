@@ -281,6 +281,8 @@ public class BillingController : ControllerBase
             applied = plan != null ? $"plan {plan.Name}" : "renewal (no plan on invoice)";
         }
 
+        AdminAudit.Log(_context, User, "invoice.approve", "Invoice", invoice.Id,
+            $"{invoice.ReferenceCode} {invoice.Amount:0.###} {invoice.Currency}: {applied}");
         await _context.SaveChangesAsync();
         return Ok(new { Message = $"Invoice {invoice.ReferenceCode} approved: {applied}. Active for 30 days." });
     }
@@ -295,6 +297,7 @@ public class BillingController : ControllerBase
         if (invoice.Status == "Confirmed") return BadRequest(new { Error = "Invoice is already confirmed." });
 
         invoice.Status = "Rejected";
+        AdminAudit.Log(_context, User, "invoice.reject", "Invoice", invoice.Id, invoice.ReferenceCode);
         await _context.SaveChangesAsync();
         return Ok(new { Message = $"Invoice {invoice.ReferenceCode} rejected." });
     }

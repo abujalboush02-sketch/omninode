@@ -292,6 +292,19 @@ public class ReminderLog
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>Every SuperAdmin action that changes data.</summary>
+public class AdminAuditLog
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid AdminUserId { get; set; }
+    public string AdminEmail { get; set; } = string.Empty;
+    public string Action { get; set; } = string.Empty;     // e.g. invoice.approve, account.suspend
+    public string TargetType { get; set; } = string.Empty; // Tenant | Agency | User | Invoice | Event
+    public Guid? TargetId { get; set; }
+    public string Details { get; set; } = string.Empty;
+    public DateTime At { get; set; } = DateTime.UtcNow;
+}
+
 public class PasswordResetToken
 {
     public Guid Id { get; set; } = Guid.NewGuid();

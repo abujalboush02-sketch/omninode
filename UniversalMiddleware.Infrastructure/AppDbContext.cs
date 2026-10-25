@@ -24,6 +24,7 @@ public class AppDbContext : DbContext
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
     public DbSet<ReminderLog> ReminderLogs => Set<ReminderLog>();
+    public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
 
     // 1. Registered Missing DbSet for EventProcessor Dependency
     public DbSet<FieldMappingRule> FieldMappingRules { get; set; }
@@ -103,6 +104,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<DeviceToken>()
             .HasIndex(d => d.UserId);
+
+        modelBuilder.Entity<AdminAuditLog>()
+            .HasIndex(a => a.At);
 
         modelBuilder.Entity<ReminderLog>()
             .HasIndex(r => new { r.AccountId, r.Kind, r.CycleKey })
