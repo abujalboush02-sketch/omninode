@@ -297,8 +297,7 @@ public class AdminController : ControllerBase
         if (!ok) return NotFound(new { Error = "Account not found." });
 
         apply(a => a.SetStatus(request.Status));
-        AdminAudit.Log(_context, User, $"account.{request.Status.ToLowerInvariant()}", Cap(type), id, $"{name}. {request.Reason}");
-        await _context.SaveChangesAsync();
+        AdminAudit.Log(_context, User, request.Status == "Active" ? "account.reactivate" : "account.suspend", Cap(type), id, $"{name}. {request.Reason}"); await _context.SaveChangesAsync();
         return Ok(new { Id = id, request.Status });
     }
 
